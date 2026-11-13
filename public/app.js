@@ -326,7 +326,7 @@ function makeLayer(def, pane) {
 }
 
 function initMap() {
-  map = L.map('map', { zoomControl: false, attributionControl: true, tap: true }).setView([56.95, 24.6], 8);
+  map = L.map('map', { zoomControl: false, attributionControl: true, tapHold: true }).setView([56.95, 24.6], 8);
   L.control.scale({ imperial: false, position: 'topleft' }).addTo(map);
   map.createPane('overlayTiles'); map.getPane('overlayTiles').style.zIndex = 250; // virs fona, zem atzīmēm
   setLayer(S.settings.layer);
@@ -336,6 +336,8 @@ function initMap() {
   scentLayer = L.layerGroup().addTo(map);
   trackLine = L.polyline([], { color: '#ff3df0', weight: 4, opacity: .85 }).addTo(map);
   map.on('click', onMapClick);
+  map.on('contextmenu', e => { if (!mode) placeSheet({ lat: e.latlng.lat, lng: e.latlng.lng }); });  // ilgs pieskāriens
+  map.on('moveend', () => windSoon());
   map.on('dragstart', () => { if (follow) { follow = false; $('#btnFollow').classList.remove('on'); } });
 }
 function setLayer(k) {
@@ -767,12 +769,15 @@ function markerSheet(id) {
   if (m.type === 'drive' && m.pts && m.pts.length > 1) rows.splice(1, 0, ['Garums', fmtDist(trackLen(m.pts.map(p => [p[0], p[1], 0])))]);
   openSheet(`<h2>${t.i} ${t.n}</h2><div class="kv">${rows.map(r => `<b>${r[0]}</b><span>${esc(r[1])}</span>`).join('')}</div>
     ${m.photo ? `<img src="${photoSrc(m)}" alt="foto" style="width:100%;border-radius:12px;margin-bottom:10px">` : ''}
+    <div id="sWx" class="wx-box"><span class="muted">🌬 Ielādē laikapstākļus šeit…</span></div>
     <div class="row gap">
       ${m.type === 'stand' && (!m.assigned || m.assigned === S.me.id || isAdminMe()) && m.assigned !== S.me.id ? '<button class="btn primary" id="sTake">Ieņemt šo torni</button>' : ''}
       <button class="btn" id="sNav">🧭 Vadīt uz šejieni</button>
       ${canEdit(m) ? '<button class="btn" id="sEdit">Labot</button><button class="btn danger" id="sDel">Dzēst</button>' : ''}
     </div>`, root => {
     const se = root.querySelector('#sEdit'); if (se) se.onclick = () => markerForm(m);
+    Wx.get(m.lat, m.lng).then(w => { const box = root.querySelector('#sWx'); if (box && box.isConnected) box.innerHTML = wxHTML(w, m, m.type === 'stand' && m.dir != null ? m : null); })
+      .catch(() => { const box = root.querySelector('#sWx'); if (box) box.innerHTML = '<span class="muted">Laikapstākļi nav pieejami (nav interneta?)</span>'; });
     root.querySelector('#sNav').onclick = () => { closeSheet(); navigateTo(m, t.i + ' ' + (m.name || m.species || t.n)); };
     const sd = root.querySelector('#sDel'); if (sd) sd.onclick = () => {
       const b = sd;
@@ -1417,6 +1422,113 @@ function renderSun() {
     <b>Saulriets</b><span>${hhmm(s.sunSet)}</span><b>Vakara krēsla</b><span>${hhmm(s.civilSet)}</span><b>Tagad</b><span>${light}</span>
     <b>Mēness</b><span>${mo.name}, ${mo.illum}% apgaismots</span>`;
 }
+/* ================= Laikapstākļi konkrētā vietā ================= */
+const WX_VARS_CUR = 'temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,cloud_cover,pressure_msl,wind_speed_10m,wind_direction_10m,wind_gusts_10m';
+const WX_VARS_H = 'temperature_2m,precipitation_probability,precipitation,wind_speed_10m,wind_direction_10m,wind_gusts_10m';
+const Wx = {
+  cache: {},   // noapaļotas koordinātas -> {t, data}
+  key(lat, lng, d = 100) { return (Math.round(lat * d) / d).toFixed(2) + ',' + (Math.round(lng * d) / d).toFixed(2); },
+  parse(j) {
+    const c = j.current;
+    return { lat: j.latitude, lng: j.longitude, dir: c.wind_direction_10m, speed: c.wind_speed_10m, gust: c.wind_gusts_10m, temp: c.temperature_2m, feels: c.apparent_temperature,
+      hum: c.relative_humidity_2m, prec: c.precipitation, cloud: c.cloud_cover, press: c.pressure_msl, hourly: j.hourly, t: Date.now() };
+  },
+  // Vienas vietas laikapstākļi ar 12 h prognozi (kešs 10 min, ~1 km režģis)
+  async get(lat, lng) {
+    const k = this.key(lat, lng), hit = this.cache[k];
+    if (hit && Date.now() - hit.t < 600000) return hit.data;
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(3)}&longitude=${lng.toFixed(3)}&current=${WX_VARS_CUR}&hourly=${WX_VARS_H}&forecast_hours=12&wind_speed_unit=ms&timezone=auto`);
+    if (!r.ok) throw new Error('wx ' + r.status);
+    const d = this.parse(await r.json()); this.cache[k] = { t: Date.now(), data: d }; return d;
+  },
+  // Daudzām vietām vienā pieprasījumā (vēja bultām kartē)
+  async many(pts) {
+    const r = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${pts.map(p => p.lat.toFixed(3)).join(',')}&longitude=${pts.map(p => p.lng.toFixed(3)).join(',')}&current=wind_speed_10m,wind_direction_10m,wind_gusts_10m&wind_speed_unit=ms`);
+    if (!r.ok) throw new Error('wx ' + r.status);
+    const j = await r.json(); return (Array.isArray(j) ? j : [j]).map(x => ({ dir: x.current.wind_direction_10m, speed: x.current.wind_speed_10m, gust: x.current.wind_gusts_10m }));
+  },
+};
+const windArrow = (dir, size = 1) => `<span style="display:inline-block;transform:rotate(${(dir + 180) % 360}deg);font-size:${size}em">↑</span>`;
+// Vai vējš nes mednieka smaržu torņa šaušanas sektorā (slikti — dzīvnieki saod)
+function scentIntoSector(st, windFrom) {
+  const to = (windFrom + 180) % 360;
+  const diff = Math.abs(((to - st.dir) % 360 + 540) % 360 - 180);
+  return diff <= (+st.arc || 90) / 2 + 15;
+}
+function wxHTML(w, place, stand) {
+  const st = sunTimes(new Date(), w.lat, w.lng);
+  let warn = '';
+  if (stand) {
+    const bad = scentIntoSector(stand, w.dir);
+    warn = bad ? `<div class="wx-warn">⚠ Vējš no ${compass(w.dir)} nes tavu smaržu <b>sektorā</b> — dzīvnieki var saost.</div>` : `<div class="wx-ok">✅ Vējš no ${compass(w.dir)} — smarža iet prom no sektora.</div>`;
+  }
+  const H = w.hourly; let rows = '';
+  if (H && H.time) {
+    for (let i = 0; i < Math.min(12, H.time.length); i++) {
+      const bad = stand && scentIntoSector(stand, H.wind_direction_10m[i]);
+      rows += `<tr class="${bad ? 'bad' : ''}"><td>${H.time[i].slice(11, 16)}</td><td>${windArrow(H.wind_direction_10m[i])} ${compass(H.wind_direction_10m[i])}</td><td>${H.wind_speed_10m[i].toFixed(0)}<span class="muted">/${H.wind_gusts_10m[i].toFixed(0)}</span></td><td>${Math.round(H.temperature_2m[i])}°</td><td>${H.precipitation_probability ? H.precipitation_probability[i] + '%' : ''}</td></tr>`;
+    }
+  }
+  return `<div class="wx-now"><div class="wx-big">${windArrow(w.dir, 1.6)}</div>
+      <div><b>Vējš no ${compass(w.dir)} (${Math.round(w.dir)}°)</b> · ${w.speed.toFixed(1)} m/s, brāzmas ${w.gust.toFixed(0)} m/s<br>
+      <span class="muted">Smarža iet uz ${compass((w.dir + 180) % 360)} · ${w.temp.toFixed(1)}° (sajūtu ${Math.round(w.feels)}°) · mitrums ${w.hum}% · mākoņi ${w.cloud}%${w.prec ? ' · nokrišņi ' + w.prec + ' mm' : ''}</span></div></div>
+    ${warn}
+    ${rows ? `<table class="wx-tab"><tr><th>Laiks</th><th>Vējš</th><th>m/s</th><th>°C</th><th>Lietus</th></tr>${rows}</table>${stand ? '<div class="muted" style="font-size:11px">Sarkanās rindas — stundas, kad vējš nes smaržu sektorā.</div>' : ''}` : ''}
+    <div class="muted" style="font-size:12px;margin-top:4px">☀ ${hhmm(st.sunRise)}–${hhmm(st.sunSet)} · krēsla līdz ${hhmm(st.civilSet)} · dati: Open-Meteo, ${hhmm(new Date(w.t))}</div>`;
+}
+/* Vietas lapa: ilgi turi pirkstu uz kartes (vai pieskaries mērīšanas rezultātam) */
+function placeSheet(p) {
+  const d = myPos ? `${fmtDist(dist(myPos, p))} · ${Math.round(bearing(myPos, p))}° ${compass(bearing(myPos, p))} no manis` : '';
+  const tmp = L.circleMarker([p.lat, p.lng], { radius: 9, color: '#fff', weight: 3, fillColor: '#3c8dde', fillOpacity: .9 }).addTo(map);
+  openSheet(`<h2>📍 Šī vieta</h2><div class="muted" style="font-size:13px">${p.lat.toFixed(5)}, ${p.lng.toFixed(5)}${d ? ' · ' + d : ''}</div>
+    <div id="pWx" class="wx-box"><span class="muted">🌬 Ielādē laikapstākļus…</span></div>
+    <div class="row gap">
+      <button class="btn primary" id="pAdd">＋ Atzīme šeit</button>
+      <button class="btn" id="pNav">🧭 Vadīt</button>
+      <button class="btn" id="pSend">📤 Sūtīt komandai</button>
+    </div>`, root => {
+    let w = null;
+    Wx.get(p.lat, p.lng).then(x => { w = x; root.querySelector('#pWx').innerHTML = wxHTML(x, p); }).catch(() => root.querySelector('#pWx').innerHTML = '<span class="muted">Laikapstākļi nav pieejami (nav interneta?)</span>');
+    root.querySelector('#pAdd').onclick = () => markerForm(null, p);
+    root.querySelector('#pNav').onclick = () => { closeSheet(); navigateTo(p, '📍 vieta'); };
+    root.querySelector('#pSend').onclick = () => {
+      if (!S.hunt) return toast('Vispirms pievienojies medībām');
+      sendChat(w ? `🌬 Šeit vējš no ${compass(w.dir)} ${w.speed.toFixed(0)} m/s (brāzmas ${w.gust.toFixed(0)}), ${Math.round(w.temp)}°` : '📍 Skatieties šo vietu', 'normal', p);
+      closeSheet(); toast('Nosūtīts');
+    };
+  });
+  const bg = $('#sheetBg'); const off = () => { map.removeLayer(tmp); bg.removeEventListener('click', off); };
+  bg.addEventListener('click', off); setTimeout(() => { const obs = new MutationObserver(() => { if ($('#sheet').classList.contains('hidden')) { map.removeLayer(tmp); obs.disconnect(); } }); obs.observe($('#sheet'), { attributes: true }); }, 0);
+}
+
+/* Vēja bultas kartē: režģis pār redzamo apgabalu, viens Open-Meteo pieprasījums */
+let windLayer = null, windT = null;
+const windCache = {};
+function windSoon() { clearTimeout(windT); windT = setTimeout(drawWind, 700); }
+async function drawWind() {
+  if (!S.settings.windArrows) { if (windLayer) { map.removeLayer(windLayer); windLayer = null; } return; }
+  if (!mapVisible()) return;
+  if (!windLayer) windLayer = L.layerGroup().addTo(map);
+  const b = map.getBounds(), cols = 4, rows = 6, pts = [];
+  for (let i = 0; i < rows; i++) for (let j = 0; j < cols; j++)
+    pts.push({ lat: b.getNorth() - (b.getNorth() - b.getSouth()) * (i + .5) / rows, lng: b.getWest() + (b.getEast() - b.getWest()) * (j + .5) / cols });
+  const d = map.getZoom() >= 12 ? 100 : map.getZoom() >= 9 ? 20 : 5;     // kešošanas režģis atkarībā no tuvinājuma
+  // vienā ~1 km šūnā vējš ir vienāds — pieprasa katru šūnu tikai vienreiz
+  const seen = new Set();
+  const need = pts.filter(p => { const k = Wx.key(p.lat, p.lng, d), c = windCache[k]; if (seen.has(k) || (c && Date.now() - c.t < 900000)) return false; seen.add(k); return true; });
+  if (need.length) {
+    try { const res = await Wx.many(need); need.forEach((p, i) => windCache[Wx.key(p.lat, p.lng, d)] = { t: Date.now(), w: res[i] }); }
+    catch (_) { if (!need.length || need.length === pts.length) return; }
+  }
+  windLayer.clearLayers();
+  for (const p of pts) {
+    const c = windCache[Wx.key(p.lat, p.lng, d)]; if (!c) continue;
+    const w = c.w, col = w.speed < 3 ? '#9ee6ff' : w.speed < 7 ? '#ffd23f' : '#ff6b3d';
+    L.marker([p.lat, p.lng], { interactive: false, icon: L.divIcon({ className: '', iconSize: [44, 44], iconAnchor: [22, 22],
+      html: `<div class="wind-ar"><div style="transform:rotate(${(w.dir + 180) % 360}deg);color:${col}">⬆</div><span>${w.speed.toFixed(0)}</span></div>` }) }).addTo(windLayer);
+  }
+}
+
 async function loadWeather() {
   const c = myPos || (map && map.getCenter()); if (!c) return;
   try {
@@ -1435,7 +1547,7 @@ function renderWeather() {
     <b>Temperatūra</b><span>${w.temp.toFixed(1)}° (sajūtu ${w.feels.toFixed(0)}°)</span><b>Nokrišņi</b><span>${w.prec} mm · mākoņi ${w.cloud}%</span>
     <b>Spiediens</b><span>${Math.round(w.press)} hPa</span><b>Vējš 6 h</b><span style="font-size:12px">${hours}</span><b>Atjaunots</b><span>${hhmm(new Date(w.t))}</span>`;
 }
-setInterval(() => { loadWeather(); renderSun(); }, 15 * 60000);
+setInterval(() => { loadWeather(); renderSun(); drawWind(); }, 15 * 60000);
 
 /* ================= Treks ================= */
 $('#btnTrack').onclick = () => {
@@ -1517,7 +1629,7 @@ function showView(v) {
   current = v;
   $$('.view').forEach(x => x.classList.toggle('active', x.id === 'view-' + v));
   $$('#tabbar button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'map') setTimeout(() => { map.invalidateSize(); if (mapDirty) renderAllMap(); if (follow && myPos) map.panTo([myPos.lat, myPos.lng]); }, 50);
+  if (v === 'map') setTimeout(() => { map.invalidateSize(); if (mapDirty) renderAllMap(); windSoon(); if (follow && myPos) map.panTo([myPos.lat, myPos.lng]); }, 50);
   compassSync();
   if (v === 'team') renderTeam();
   if (v === 'log') renderLog();
@@ -1537,6 +1649,7 @@ $('#btnLayers').onclick = () => {
   Object.entries(LAYERS).forEach(([k, l]) => (groups[l.g || 'Pasaules kartes'] = groups[l.g || 'Pasaules kartes'] || []).push([k, l]));
   openSheet(`<h2>Kartes fons</h2>${Object.entries(groups).map(([g, list]) => `<div class="muted" style="font-size:12px;margin:10px 2px 6px">${esc(g)}</div><div class="list">${list.map(([k, l]) => `<button class="btn ${S.settings.layer === k ? 'primary' : ''}" data-k="${k}" style="text-align:left">${esc(l.n)}</button>`).join('')}</div>`).join('')}
     <h2 style="margin-top:18px">Pārklājumi <span class="muted" style="font-size:12px;font-weight:400">LVM GEO</span></h2>
+    <label class="sw"><input type="checkbox" id="windTog" ${S.settings.windArrows ? 'checked' : ''}> 🌬 Vēja bultas (virziens un ātrums, m/s)</label>
     ${Object.entries(OVERLAYS).map(([k, o]) => `<label class="sw"><input type="checkbox" data-o="${k}" ${activeOverlays[k] ? 'checked' : ''}> ${esc(o.n)}${o.o.minZoom > 10 ? ` <span class="muted" style="font-size:11px">(redzams tuvinot)</span>` : ''}</label>`).join('')}
     <h2 style="margin-top:18px">Karte bez interneta</h2>
     <p class="muted" style="font-size:13px">Lejupielādē ${S.zone.length >= 3 ? '<b>medību zonu</b>' : '<b>redzamo apgabalu</b>'} ar izvēlēto fonu${Object.keys(activeOverlays).length ? ' un ieslēgtajiem pārklājumiem' : ''}, lai karte strādātu mežā bez zonas.</p>
@@ -1548,6 +1661,7 @@ $('#btnLayers').onclick = () => {
     r.querySelector('#dlGo').onclick = e => { e.stopPropagation(); downloadArea(+r.querySelector('#dlZoom').value, r.querySelector('#dlStat'), r.querySelector('#dlGo')); };
     r.onclick = e => { const b = e.target.closest('button[data-k]'); if (!b) return; setLayer(b.dataset.k); closeSheet(); };
     r.querySelectorAll('input[data-o]').forEach(i => i.onchange = () => setOverlay(i.dataset.o, i.checked));
+    r.querySelector('#windTog').onchange = e => { S.settings.windArrows = e.target.checked; save(); drawWind(); if (e.target.checked) toast('Ilgi turi pirkstu uz kartes, lai redzētu laikapstākļus konkrētā vietā', 4000); };
   });
 };
 $('#btnZone').onclick = () => {
@@ -1585,6 +1699,7 @@ $('#setPower').onchange = e => { S.settings.power = e.target.checked; save(); if
 $('#setInterval').onchange = e => { S.settings.interval = +e.target.value; save(); };
 $('#setShare').onchange = e => { S.settings.share = e.target.checked; save(); if (!e.target.checked && S.hunt) Sync.send('member', { id: S.me.id, name: S.me.name, role: S.me.role, color: S.me.color, lat: null, lng: null, t: Date.now() }); };
 $('#btnWeather').onclick = loadWeather;
+$('#windPill').onclick = () => { const c = myPos || map.getCenter(); showView('map'); placeSheet({ lat: c.lat, lng: c.lng }); };
 $('#btnPush').onclick = () => Push.register(true);
 $('#btnReplay').onclick = startReplay;
 $('#btnReset').onclick = () => { const b = $('#btnReset'); if (!b.dataset.ok) { b.dataset.ok = 1; b.textContent = 'Spied vēlreiz, lai dzēstu'; return; } localStorage.removeItem(KEY); location.reload(); };

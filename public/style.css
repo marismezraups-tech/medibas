@@ -154,3 +154,17 @@ body.tower #topbar, body.tower main, body.tower #tabbar, body.tower #sosBanner {
 .leaflet-tooltip-top:before{border-top-color:#000c}
 /* dalībnieka vārds virs ikonas, atzīmes nosaukums zem — nepārklājas, kad mednieks sēž tornī */
 .mem .mk-lbl{top:auto;bottom:37px}
+/* Laikapstākļi */
+.wx-box{background:var(--bg);border:1px solid var(--line);border-radius:12px;padding:10px;margin:10px 0}
+.wx-now{display:flex;gap:12px;align-items:center}
+.wx-big{width:48px;height:48px;border-radius:50%;background:var(--panel2);display:flex;align-items:center;justify-content:center;font-size:22px;flex:none;color:#9ee6ff}
+.wx-warn{margin-top:8px;padding:8px;border-radius:8px;background:#4a2a08;color:#ffcc66;font-size:13px}
+.wx-ok{margin-top:8px;padding:8px;border-radius:8px;background:#163a1c;color:#8fe39b;font-size:13px}
+.wx-tab{width:100%;border-collapse:collapse;margin-top:8px;font-size:13px}
+.wx-tab th{color:var(--muted);font-weight:500;text-align:left;padding:2px 4px}
+.wx-tab td{padding:3px 4px;border-top:1px solid var(--line)}
+.wx-tab tr.bad td{background:#3a1414}
+#windPill{cursor:pointer}
+.wind-ar{position:relative;width:44px;height:44px;display:flex;align-items:center;justify-content:center;pointer-events:none}
+.wind-ar div{font-size:26px;line-height:1;text-shadow:0 0 3px #000,0 0 2px #000;font-weight:900}
+.wind-ar span{position:absolute;bottom:-2px;right:2px;font-size:11px;font-weight:800;color:#fff;text-shadow:0 0 3px #000}
