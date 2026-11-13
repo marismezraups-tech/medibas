@@ -1,16 +1,25 @@
 // Service worker: aplikācijas čaula bezsaistē + kartes flīžu kešs
-const APP = 'medibas-app-v5', TILES = 'medibas-tiles-v1', MAX_TILES = 25000;
+const APP = 'medibas-app-v6', TILES = 'medibas-tiles-v1', MAX_TILES = 25000;
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png',
-  'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
+  'vendor/leaflet/leaflet.css', 'vendor/leaflet/leaflet.js', 'vendor/qrcode/qrcode.min.js', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => { e.waitUntil(caches.open(APP).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())); });
-self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== APP && k !== TILES).map(k => caches.delete(k)))).then(() => self.clients.claim())); });
+self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== APP && k !== TILES && k !== 'medibas-photos-v1').map(k => caches.delete(k)))).then(() => self.clients.claim())); });
 
 const isTile = u => /tile\.opentopomap\.org|tile\.openstreetmap\.org|arcgisonline\.com|geoserver\.lvmgeo\.lv|lvmgeoserver\.lvm\.lv/.test(u);
 
 self.addEventListener('fetch', e => {
   const req = e.request, url = req.url;
   if (req.method !== 'GET') return;
+  // foto: kešs vispirms (nemainās), lai būtu redzami arī mežā bez zonas
+  if (url.includes('/api/hunt/') && url.includes('/photo/')) {
+    const key = url.replace(/[?&](id|t|k)=[^&]*/g, '');   // kešā bez atslēgām
+    e.respondWith(caches.open('medibas-photos-v1').then(async c => {
+      const hit = await c.match(key); if (hit) return hit;
+      const res = await fetch(req); if (res.ok) c.put(key, res.clone()); return res;
+    }).catch(() => new Response('', { status: 504 })));
+    return;
+  }
   if (url.includes('/api/') || url.includes('open-meteo.com')) return; // vienmēr tiešsaistē
   if (isTile(url)) {
     // kešs vispirms (flīzes reti mainās), tad tīkls
@@ -27,7 +36,7 @@ self.addEventListener('fetch', e => {
   }
   // aplikācijas faili: tīkls vispirms, rezervē kešs
   e.respondWith(fetch(req).then(res => {
-    if (res.ok && (url.startsWith(self.location.origin) || url.includes('unpkg.com') || url.includes('cdnjs.cloudflare.com'))) { const cl = res.clone(); caches.open(APP).then(c => c.put(req, cl)); }
+    if (res.ok && (url.startsWith(self.location.origin))) { const cl = res.clone(); caches.open(APP).then(c => c.put(req, cl)); }
     return res;
   }).catch(() => caches.match(req).then(r => r || caches.match('index.html'))));
 });

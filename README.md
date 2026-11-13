@@ -27,8 +27,8 @@ Progresīvā tīmekļa aplikācija (PWA), kas pēc funkcijām līdzinās Huntloc
 | **Medību plāns** | 📅 Sākuma laiks ar atpakaļskaitīšanu, pulcēšanās vieta, torņu sadale — dalībnieki saņem paziņojumu par piešķirto torni. |
 | **Medību atkārtošana** | Žurnāls → ⏪: visu dalībnieku, suņu un dzinēju kustība kartē ar laika slīdni un ātrumu ×15/×60/×300 (serveris glabā trekus 7 dienas). |
 | **Karte bez interneta** | 🗺 → Lejupielādēt: medību zona (vai redzamais apgabals) ar izvēlēto fonu un pārklājumiem līdz 18. tuvinājumam. |
-| **Parole un izslēgšana** | Medībām var iestatīt paroli; vadītājs (izveidotājs) var izslēgt dalībnieku. |
-| **GPS trackeri** | Suņu u.c. trackeri ar OsmAnd/Traccar protokolu tiek rādīti kartē kā dalībnieki (sk. SAKT-SEIT.md). |
+| **Drošība un tiesības** | Katram dalībniekam ir slepena atslēga — par citu (arī vadītāju) uzdoties nevar. Medību parole; vadītājs var izslēgt dalībnieku un iecelt palīgus. Torņus, sektorus, zonu, dzinēju līnijas un plānu maina tikai vadītājs un palīgi; savus novērojumus — autors. Dzēšanu var atsaukt. |
+| **GPS trackeri** | Suņu u.c. trackeri ar OsmAnd/Traccar protokolu tiek rādīti kartē kā dalībnieki; katram trackerim ir slepena adrese (sk. SAKT-SEIT.md). |
 | **Pastāvīgi dati** | Pēc izvēles — Supabase datubāze (bez maksas), lai medību dati un treki nepazustu, kad bezmaksas serveris aizmieg. |
 | **Īsta aplikācija** | Mape `native/` — Capacitor čaula Android/iOS ar fona atrašanās vietu (jābūvē ar Android Studio / Xcode). |
 | **Maršruta ieraksts** | Treks ar attālumu un ilgumu; eksportē GPX. |
@@ -75,7 +75,8 @@ Telefona pārlūks GPS atļauj tikai caur **HTTPS**, tāpēc serverim vajag HTTP
 ## Ierobežojumi
 
 - Fonā pārlūka aplikācija atrašanās vietu nesūta (iOS/Android to aptur). Medību laikā ekrānam jāpaliek ieslēgtam (vai jāizmanto 🌙 torņa režīms). Pilnībā fonā strādā tikai īstā aplikācija no mapes `native/`.
-- Medību parole sargā no nejaušiem pievienotājiem, bet tā nav pilnvērtīga lietotāju autentifikācija (nav kontu).
+- Nav lietotāju kontu: dalībnieka identitāte ir piesaistīta ierīcei (slepena atslēga pārlūkā). Notīrot pārlūka datus, telefons pievienojas kā jauns dalībnieks.
+- Ja serveris tiek restartēts bez Supabase, līdz vadītāja telefona atgriešanās brīdim medības ir bez vadītāja (visi drošā režīmā var labot). Ar Supabase tas nenotiek.
 - LVM GEO slāņi nāk no `geoserver.lvmgeo.lv` (tā pati adrese, ko izmanto JOSM Latvijas kartēm). Ja tas neatbild, aplikācija automātiski pārslēdzas uz veco `lvmgeoserver.lvm.lv/geoserver/ows`. Adreses un slāņu nosaukumi ir `app.js` sākumā (`LVM`, `LAYERS`, `OVERLAYS`). Pirms publiskas vai komerciālas lietošanas pārbaudiet LVM GEO lietošanas noteikumus.
 - LVM meža kvartālu/nogabalu un medību iecirkņu slāņi publiskajā WMS netika atrasti, tāpēc tie nav iekļauti.
 
@@ -86,7 +87,9 @@ server.js                 sinhronizācijas + statisko failu serveris (bez atkar�
 public/index.html         aplikācijas karkass
 public/app.js             visa loģika
 public/style.css          tumšais, ar cimdiem lietojamais dizains
-public/sw.js              bezsaiste + kartes flīžu kešs
+public/sw.js              bezsaiste + kartes flīžu un foto kešs
+public/vendor/            Leaflet 1.9.4 (BSD-2) un qrcodejs (MIT) — iekļauti, nav atkarības no CDN
+TESTESANA.md              pārbaudes saraksts uz īstiem telefoniem
 public/manifest.webmanifest, public/icons/
 render.yaml               Render.com Blueprint (bezmaksas publicēšana)
 Dockerfile                Fly.io / Railway / savs serveris (dati /data mapē)

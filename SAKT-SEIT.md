@@ -116,8 +116,8 @@ Bezmaksas Render serveris aizmigstot aizmirst datus (tos atjauno telefoni, bet n
 
 ### 📡 GPS trackeri suņiem
 Der jebkura ierīce vai lietotne ar **OsmAnd** protokolu, piem., bezmaksas **Traccar Client** uz veca Android telefona suņa vestē:
-1. Aplikācijā: **Komanda → GPS trackeri → ＋ Pievienot** → ievadi ierīces ID (piem., `reksis1`), vārdu, veidu.
-2. Traccar Client: **Device identifier** = tas pats ID, **Server URL** = `https://medibas.onrender.com/api/tracker`, **Frequency** = 10 s, ieslēdz **Service status**.
+1. Aplikācijā (vadītājs): **Komanda → GPS trackeri → ＋ Pievienot** → ievadi ierīces ID (piem., `reksis1`), vārdu, veidu. Parādīsies **slepena servera adrese** formā `https://medibas.onrender.com/api/tracker/XXXXXXXX` — nokopē to.
+2. Traccar Client: **Device identifier** = tas pats ID, **Server URL** = nokopētā adrese, **Frequency** = 10 s, ieslēdz **Service status**.
 3. Suns parādās kartē kā dalībnieks; uz viņu strādā arī sektoru brīdinājumi.
 
 Specializētie suņu kaklasiksnu trackeri (Garmin u.c.) savus datus parasti nedod ārējiem serveriem; lētie GPS trackeri bieži atbalsta OsmAnd/HTTP — pārbaudi trackera instrukcijā.

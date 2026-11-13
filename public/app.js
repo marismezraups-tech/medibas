@@ -35,6 +35,19 @@ const fmtDist = m => m < 1000 ? Math.round(m) + ' m' : (m / 1000).toFixed(m < 10
 const DIRS = ['Z', 'ZZA', 'ZA', 'AZA', 'A', 'ADA', 'DA', 'DDA', 'D', 'DDR', 'DR', 'RDR', 'R', 'RZR', 'ZR', 'ZZR'];
 const compass = b => DIRS[Math.round(b / 22.5) % 16];
 
+function randToken() { const a = new Uint8Array(20); crypto.getRandomValues(a); return Array.from(a, b => b.toString(16).padStart(2, '0')).join(''); }
+// Pieprasījumu parametri: dalībnieka ID + slepenā atslēga + medību parole
+function authQS() { return 'id=' + encodeURIComponent(S.me.id) + '&t=' + encodeURIComponent((S.hunt && S.hunt.token) || '') + '&k=' + encodeURIComponent((S.hunt && S.hunt.pass) || ''); }
+const isAdminMe = () => !!S.hunt && (!S.hunt.owner || S.hunt.owner === S.me.id || (S.hunt.admins || []).includes(S.me.id));
+const PLAN_TYPES = ['stand', 'drive'];
+// Vai drīkstu labot/dzēst šo atzīmi (tas pats noteikums kā serverī)
+function canEdit(m) { if (!S.hunt) return true; if (isAdminMe()) return true; if (PLAN_TYPES.includes(m.type)) return false; return !m.by || m.by === S.me.id; }
+function photoSrc(m) { return !m.photo ? '' : String(m.photo).startsWith('data:') ? m.photo : 'api/hunt/' + encodeURIComponent(S.hunt ? S.hunt.code : '') + '/photo/' + encodeURIComponent(m.id) + '?' + authQS() + '&v=' + encodeURIComponent(m.photo); }
+function toastAction(msg, label, fn, ms = 7000) {
+  const t = $('#toast'); t.innerHTML = esc(msg) + ` <button class="btn sm" style="margin-left:8px;min-height:30px">${esc(label)}</button>`;
+  t.classList.remove('hidden'); t.querySelector('button').onclick = () => { t.classList.add('hidden'); fn(); };
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), ms);
+}
 function toast(msg, ms = 2500) { const t = $('#toast'); t.textContent = msg; t.classList.remove('hidden'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.add('hidden'), ms); }
 function vibrate(p) { if (S.settings.vibrate && navigator.vibrate) try { navigator.vibrate(p); } catch (_) {} }
 
@@ -74,6 +87,7 @@ const S = {
   weather: null,
 };
 function load() {
+  setTimeout(() => { if (S.hunt && !S.hunt.token) { S.hunt.token = randToken(); save(); } }, 0);
   try { const d = JSON.parse(localStorage.getItem(KEY)); if (d) { Object.assign(S, d); S.settings = Object.assign({ wake: false, scent: false, sectors: true, vibrate: true, compass: false, interval: 5, share: true, layer: 'topo', overlays: {}, power: true }, d.settings); } } catch (_) {}
   S.recording = S.recording && S.track.length > 0;
 }
@@ -95,7 +109,8 @@ const Sync = {
     this.disconnect();
     if (!S.hunt || !this.server) return setConn();
     setConn('wait');
-    const es = this.es = new EventSource('api/hunt/' + encodeURIComponent(S.hunt.code) + '/stream?id=' + S.me.id + '&k=' + encodeURIComponent(S.hunt.pass || ''));
+    if (!S.hunt.token) { S.hunt.token = randToken(); save(); }
+    const es = this.es = new EventSource('api/hunt/' + encodeURIComponent(S.hunt.code) + '/stream?' + authQS());
     es.onopen = () => { this.connected = true; setConn('on'); this.flush(); pushMember(); Push.register(); };
     es.onerror = () => { this.connected = false; setConn('wait'); this.checkAccess(); };
     es.onmessage = e => { try { handle(JSON.parse(e.data), true); } catch (err) { console.warn(err); } };
@@ -105,7 +120,7 @@ const Sync = {
   async checkAccess() {
     if (this._chk || !S.hunt || !this.server) return; this._chk = true;
     try {
-      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '?id=' + S.me.id + '&k=' + encodeURIComponent(S.hunt.pass || ''), { cache: 'no-store' });
+      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '?' + authQS(), { cache: 'no-store' });
       if (r.status === 403) this.denied((await r.json()).error);
     } catch (_) {}
     setTimeout(() => this._chk = false, 5000);
@@ -113,6 +128,11 @@ const Sync = {
   denied(why) {
     this.disconnect();
     if (why === 'banned') { const n = S.hunt.name; leaveHunt(true); toast('Medību vadītājs tevi izslēdza no medībām „' + n + '”', 6000); }
+    else if (why === 'token') {
+      // šīs ierīces atslēga neder (piem., dati atjaunoti no citas ierīces) — pievienojas kā jauns dalībnieks
+      S.me.id = uid(); S.hunt.token = randToken(); S.hunt.owner = S.hunt.owner === S.me.id ? '' : S.hunt.owner; save();
+      toast('Savienojums atjaunots kā jauns dalībnieks', 4000); setTimeout(() => this.connect(), 500);
+    }
     else askPassword(S.hunt.code, S.hunt.pass ? 'Parole ir nomainīta vai nepareiza.' : 'Šīm medībām vajag paroli.');
   },
   send(type, payload) {
@@ -129,8 +149,12 @@ const Sync = {
     this._busy = true;
     const batch = S.outbox.slice(0, 50);
     try {
-      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: S.me.id, k: S.hunt.pass || '', events: batch }) });
-      if (r.ok) { S.outbox = S.outbox.filter(e => !batch.includes(e)); save(); }
+      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: S.me.id, t: S.hunt.token || '', k: S.hunt.pass || '', events: batch }) });
+      if (r.ok) {
+        S.outbox = S.outbox.filter(e => !batch.includes(e)); save();
+        const res = await r.json().catch(() => ({}));
+        if (res.rejected && res.rejected.length) { toast('Šīs izmaiņas var veikt tikai medību vadītājs', 4000); setTimeout(() => this.connect(), 300); }
+      }
       else if (r.status === 403) { this._busy = false; return this.denied((await r.json()).error); }
     } catch (_) {}
     this._busy = false;
@@ -155,7 +179,8 @@ function handle(ev, remote) {
       const srvEmpty = !Object.keys(p.markers || {}).length && !(p.chat || []).length && !(p.zone || []).length;
       const localHas = Object.keys(S.markers).length || S.chat.length || S.zone.length;
       if (srvEmpty && localHas && S.hunt) {
-        const seed = [{ type: 'hunt', payload: { name: S.hunt.name, status: S.hunt.status } }, ...Object.values(S.markers).map(m => ({ type: 'marker', payload: m }))];
+        const mine = S.hunt.owner === S.me.id;
+        const seed = [{ type: 'hunt', payload: Object.assign({ name: S.hunt.name, status: S.hunt.status, start: S.hunt.start || '', meet: S.hunt.meet || '' }, mine ? { claimOwner: true, admins: S.hunt.admins || [] } : {}, mine && S.hunt.pass ? { pass: S.hunt.pass } : {}) }, ...Object.values(S.markers).map(m => ({ type: 'marker', payload: m }))];
         if (S.zone.length) seed.push({ type: 'zone', payload: { points: S.zone } });
         S.chat.slice(-100).forEach(c => seed.push({ type: 'chat', payload: c }));
         S.outbox = [...seed, ...S.outbox]; save(); setTimeout(() => Sync.flush(), 300);
@@ -166,11 +191,14 @@ function handle(ev, remote) {
       const ids = new Set((p.chat || []).map(c => c.id));
       S.chat = [...(p.chat || []), ...S.chat.filter(c => !ids.has(c.id) && S.outbox.some(o => o.payload && o.payload.id === c.id))].sort((a, b) => a.t - b.t);
       if (S.hunt) {
+        const wasOwner = S.hunt.owner === S.me.id;
         // servera noklusējuma nosaukums nepārraksta lokāli ievadīto
         if (p.name && p.name !== 'Medības ' + S.hunt.code) S.hunt.name = p.name;
-        else if (p.name !== S.hunt.name) S.outbox.unshift({ type: 'hunt', payload: { name: S.hunt.name } });
+        else if (p.name !== S.hunt.name && (wasOwner || !p.owner)) S.outbox.unshift({ type: 'hunt', payload: { name: S.hunt.name } });
         S.hunt.status = p.status || S.hunt.status;
-        Object.assign(S.hunt, { owner: p.owner || '', hasPass: !!p.hasPass, start: p.start || '', meet: p.meet || '' });
+        Object.assign(S.hunt, { owner: p.owner || '', admins: p.admins || [], hasPass: !!p.hasPass, start: p.start || '', meet: p.meet || '' });
+        // serveris pēc restarta "aizmirsa" vadītāju — atjauno to
+        if (wasOwner && !p.owner) { S.hunt.owner = S.me.id; S.outbox.unshift({ type: 'hunt', payload: Object.assign({ claimOwner: true, admins: S.hunt.admins }, S.hunt.pass ? { pass: S.hunt.pass } : {}) }); setTimeout(() => Sync.flush(), 300); }
       }
       S.trackers = p.trackers || {};
       // pārliek atpakaļ neapstiprinātās lokālās izmaiņas
@@ -218,7 +246,7 @@ function handle(ev, remote) {
     case 'hunt':
       if (S.hunt) {
         if (p.name) S.hunt.name = p.name; if (p.status) S.hunt.status = p.status;
-        for (const k of ['owner', 'start', 'meet']) if (p[k] != null) S.hunt[k] = p[k];
+        for (const k of ['owner', 'start', 'meet', 'admins']) if (p[k] != null) S.hunt[k] = p[k];
         if (p.hasPass != null) S.hunt.hasPass = p.hasPass;
         if ('pass' in p && !remote) S.hunt.pass = p.pass;   // īpašnieks iestatīja paroli
       }
@@ -605,12 +633,13 @@ function startPlace(existing) {
 }
 
 function markerForm(existing, pos) {
+  if (existing && !canEdit(existing)) return toast('Šo atzīmi var mainīt tikai tās autors vai medību vadītājs');
   const m = Object.assign({ type: 'obs', count: 1, dir: null, arc: 90, range: 250, sex: '', age: '' }, existing || {}, pos || {});
   const memberOpts = Object.values(S.members).filter(x => x.name).map(x => `<option value="${esc(x.id)}" ${m.assigned === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('');
   const meOpt = !S.members[S.me.id] ? `<option value="${S.me.id}" ${m.assigned === S.me.id ? 'selected' : ''}>${esc(S.me.name)} (es)</option>` : '';
   openSheet(`
     <h2>${existing ? 'Labot atzīmi' : 'Jauna atzīme'}</h2>
-    <div class="grid" id="fType">${Object.entries(TYPES).map(([k, t]) => `<button data-k="${k}" class="${m.type === k ? 'on' : ''}"><span>${t.i}</span>${t.n}</button>`).join('')}</div>
+    <div class="grid" id="fType">${Object.entries(TYPES).filter(([k]) => isAdminMe() || !PLAN_TYPES.includes(k) || m.type === k).map(([k, t]) => `<button data-k="${k}" class="${m.type === k ? 'on' : ''}"><span>${t.i}</span>${t.n}</button>`).join('')}</div>
     <div id="fSpecies"><label>Suga</label><div class="chips">${SPECIES.map(s => `<button data-s="${s}" class="${m.species === s ? 'on' : ''}">${s}</button>`).join('')}</div></div>
     <div id="fCount"><label>Skaits<input id="fCnt" type="number" min="1" value="${m.count || 1}" inputmode="numeric"></label></div>
     <div id="fHarvest" class="two">
@@ -634,7 +663,7 @@ function markerForm(existing, pos) {
     <label>Piezīme<textarea id="fNote" rows="2">${esc(m.note || '')}</textarea></label>
     <div id="fPhotoBox">
       <label class="btn" style="display:inline-flex;align-items:center;gap:6px;color:var(--text);margin:4px 0">📷 ${m.photo ? 'Mainīt foto' : 'Pievienot foto'}<input id="fPhoto" type="file" accept="image/*" style="display:none"></label>
-      <img id="fPhotoPrev" src="${m.photo || ''}" class="${m.photo ? '' : 'hidden'}" style="display:block;max-width:100%;max-height:180px;border-radius:10px;margin-top:6px">
+      <img id="fPhotoPrev" src="${photoSrc(m)}" class="${m.photo ? '' : 'hidden'}" style="display:block;max-width:100%;max-height:180px;border-radius:10px;margin-top:6px">
     </div>
     <div class="muted" style="font-size:12px">📍 ${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}</div>
     <div class="row gap" style="margin-top:12px">
@@ -737,22 +766,23 @@ function markerSheet(id) {
   ].filter(Boolean);
   if (m.type === 'drive' && m.pts && m.pts.length > 1) rows.splice(1, 0, ['Garums', fmtDist(trackLen(m.pts.map(p => [p[0], p[1], 0])))]);
   openSheet(`<h2>${t.i} ${t.n}</h2><div class="kv">${rows.map(r => `<b>${r[0]}</b><span>${esc(r[1])}</span>`).join('')}</div>
-    ${m.photo ? `<img src="${m.photo}" style="width:100%;border-radius:12px;margin-bottom:10px">` : ''}
+    ${m.photo ? `<img src="${photoSrc(m)}" alt="foto" style="width:100%;border-radius:12px;margin-bottom:10px">` : ''}
     <div class="row gap">
-      ${m.type === 'stand' ? '<button class="btn primary" id="sTake">Ieņemt šo torni</button>' : ''}
+      ${m.type === 'stand' && (!m.assigned || m.assigned === S.me.id || isAdminMe()) && m.assigned !== S.me.id ? '<button class="btn primary" id="sTake">Ieņemt šo torni</button>' : ''}
       <button class="btn" id="sNav">🧭 Vadīt uz šejieni</button>
-      <button class="btn" id="sEdit">Labot</button>
-      <button class="btn danger" id="sDel">Dzēst</button>
+      ${canEdit(m) ? '<button class="btn" id="sEdit">Labot</button><button class="btn danger" id="sDel">Dzēst</button>' : ''}
     </div>`, root => {
-    root.querySelector('#sEdit').onclick = () => markerForm(m);
+    const se = root.querySelector('#sEdit'); if (se) se.onclick = () => markerForm(m);
     root.querySelector('#sNav').onclick = () => { closeSheet(); navigateTo(m, t.i + ' ' + (m.name || m.species || t.n)); };
-    root.querySelector('#sDel').onclick = () => {
-      const b = root.querySelector('#sDel');
+    const sd = root.querySelector('#sDel'); if (sd) sd.onclick = () => {
+      const b = sd;
       if (!b.dataset.ok) { b.dataset.ok = 1; b.textContent = 'Tiešām dzēst?'; return; }
+      const copy = Object.assign({}, m);
       Sync.send('marker_del', { id }); closeSheet();
+      toastAction((TYPES[m.type] || TYPES.other).n + ' dzēsts', '↶ Atsaukt', () => { Sync.send('marker', Object.assign(copy, { updated: Date.now(), updatedBy: S.me.id })); toast('Atjaunots'); });
     };
     const tk = root.querySelector('#sTake'); if (tk) tk.onclick = () => {
-      Object.values(S.markers).filter(x => x.type === 'stand' && x.assigned === S.me.id && x.id !== id).forEach(x => Sync.send('marker', Object.assign({}, x, { assigned: '' })));
+      Object.values(S.markers).filter(x => x.type === 'stand' && x.assigned === S.me.id && x.id !== id).forEach(x => Sync.send('marker', Object.assign({}, x, { assigned: '', updated: Date.now(), updatedBy: S.me.id })));
       Sync.send('marker', Object.assign({}, m, { assigned: S.me.id, updated: Date.now(), updatedBy: S.me.id }));
       if (S.hunt) sendChat(`Esmu tornī ${m.name || ''} ✅`, 'normal', { lat: m.lat, lng: m.lng });
       closeSheet();
@@ -767,7 +797,11 @@ function memberSheet(id) {
     <b>Loma</b><span>${ROLES[m.role] || '—'}</span><b>Pēdējās ziņas</b><span>${ago(m.t)} atpakaļ</span>
     <b>Precizitāte</b><span>${m.acc ? '±' + m.acc + ' m' : '—'}</span><b>Baterija</b><span>${m.bat != null ? m.bat + '%' : 'nav zināms'}</span><b>No manis</b><span>${d}</span></div>
     <div class="row gap"><button class="btn primary" id="mNav">🧭 Vadīt uz</button><button class="btn" id="mCenter">Rādīt kartē</button>
-    ${isOwner() && id !== S.me.id && !m.tracker ? '<button class="btn danger" id="mKick">Izslēgt no medībām</button>' : ''}</div>`, root => {
+    ${isOwner() && id !== S.me.id && !m.tracker ? `<button class="btn" id="mAdm">${(S.hunt.admins || []).includes(id) ? 'Noņemt palīga tiesības' : '★ Iecelt par palīgu'}</button>` : ''}
+    ${isAdminMe() && S.hunt.owner && id !== S.me.id && id !== S.hunt.owner && !m.tracker ? '<button class="btn danger" id="mKick">Izslēgt no medībām</button>' : ''}</div>
+    ${(S.hunt && S.hunt.admins || []).includes(id) ? '<p class="muted" style="font-size:12px">★ Vadītāja palīgs — var mainīt torņus, zonu un medību plānu.</p>' : ''}`, root => {
+    const ad = root.querySelector('#mAdm');
+    if (ad) ad.onclick = () => { const a = new Set(S.hunt.admins || []); a.has(id) ? a.delete(id) : a.add(id); Sync.send('hunt', { admins: [...a] }); S.hunt.admins = [...a]; closeSheet(); renderTeam(); };
     const kb = root.querySelector('#mKick');
     if (kb) kb.onclick = () => { if (!kb.dataset.ok) { kb.dataset.ok = 1; kb.textContent = 'Tiešām izslēgt?'; return; } Sync.send('kick', { id }); delete S.members[id]; renderMember(id); closeSheet(); toast(m.name + ' izslēgts. Ja vajag, nomaini arī medību paroli.'); };
     root.querySelector('#mNav').onclick = () => { closeSheet(); navigateTo(m, m.name, id); };
@@ -966,27 +1000,27 @@ function renderTeam() {
       <div class="row gap">
         <button class="btn" id="hShare">📤 Dalīties</button>
         <button class="btn" id="hQR">▦ QR</button>
-        <button class="btn ${S.hunt.status === 'active' ? '' : 'primary'}" id="hStatus">${S.hunt.status === 'active' ? '🏁 Beigt medības' : '▶ Sākt medības'}</button>
-        <button class="btn" id="hPlan">📅 Plāns</button>
+        ${isAdminMe() ? `<button class="btn ${S.hunt.status === 'active' ? '' : 'primary'}" id="hStatus">${S.hunt.status === 'active' ? '🏁 Beigt medības' : '▶ Sākt medības'}</button>
+        <button class="btn" id="hPlan">📅 Plāns</button>` : ''}
         ${isOwner() ? `<button class="btn" id="hPass">${S.hunt.hasPass ? '🔒 Parole' : '🔓 Parole'}</button>` : ''}
-        <button class="btn" id="hRename">✏</button>
+        ${isAdminMe() ? '<button class="btn" id="hRename">✏</button>' : ''}
         <button class="btn danger" id="hLeave">Iziet</button>
       </div>
       ${planLine() ? `<div class="kv" style="margin-top:10px">${planLine()}</div>` : ''}
-      ${isOwner() ? '<p class="muted" style="font-size:12px;margin:8px 0 0">★ Tu esi medību vadītājs (vari mainīt paroli un izslēgt dalībniekus).</p>' : ''}`;
-    $('#hPlan').onclick = planSheet;
+      ${isOwner() ? '<p class="muted" style="font-size:12px;margin:8px 0 0">★ Tu esi medību vadītājs: tikai tu (un tavi palīgi) vari mainīt torņus, sektorus, zonu, dzinēju līnijas un plānu. Palīgu iecel, pieskaroties dalībniekam.</p>' : isAdminMe() ? '<p class="muted" style="font-size:12px;margin:8px 0 0">★ Tu esi vadītāja palīgs.</p>' : '<p class="muted" style="font-size:12px;margin:8px 0 0">Torņus, zonu un plānu maina medību vadītājs. Tu vari pievienot novērojumus un ieņemt brīvu torni.</p>'}`;
+    if ($('#hPlan')) $('#hPlan').onclick = planSheet;
     const hp = $('#hPass'); if (hp) hp.onclick = passSheet;
     $('#hShare').onclick = async () => {
       const text = `Pievienojies medībām "${S.hunt.name}": kods ${S.hunt.code}\n${link}`;
       try { if (navigator.share) await navigator.share({ title: 'Medības', text, url: link }); else { await navigator.clipboard.writeText(text); toast('Nokopēts'); } } catch (_) {}
     };
     $('#hQR').onclick = () => showQR('Pievienoties: ' + S.hunt.name, link, 'Kods ' + S.hunt.code + ' · ' + link);
-    $('#hStatus').onclick = () => {
+    if ($('#hStatus')) $('#hStatus').onclick = () => {
       const st = S.hunt.status === 'active' ? 'ended' : 'active';
       Sync.send('hunt', { status: st });
       sendChat(st === 'active' ? '▶ Medības sākušās! Ievērojiet šaušanas sektorus.' : '🏁 Medības beigušās. Ieroči izlādēti!', 'alert');
     };
-    $('#hRename').onclick = () => openSheet(`<h2>Pārdēvēt medības</h2><label>Nosaukums<input id="rn" value="${esc(S.hunt.name)}"></label><button class="btn primary" id="rnOk" style="width:100%">Saglabāt</button>`, r => {
+    if ($('#hRename')) $('#hRename').onclick = () => openSheet(`<h2>Pārdēvēt medības</h2><label>Nosaukums<input id="rn" value="${esc(S.hunt.name)}"></label><button class="btn primary" id="rnOk" style="width:100%">Saglabāt</button>`, r => {
       r.querySelector('#rnOk').onclick = () => { const v = r.querySelector('#rn').value.trim(); if (v) Sync.send('hunt', { name: v }); closeSheet(); };
     });
     $('#hLeave').onclick = () => {
@@ -1008,8 +1042,8 @@ function renderTeam() {
   }).join('') : '<div class="empty">Neviena dalībnieka</div>';
   // GPS trackeri
   $('#trackerList').innerHTML = !S.hunt ? '<div class="empty">Pievienojies medībām</div>' :
-    Object.values(S.trackers || {}).map(t => { const m = S.members['trk-' + t.dev]; return `<div class="item" data-dev="${esc(t.dev)}"><div class="av" style="background:${esc(t.color)}">${t.role === 'dog' ? '🐕' : '📡'}</div><div class="meta"><div>${esc(t.name)}</div><div>ID ${esc(t.dev)} · ${m && m.t ? ago(m.t) + (m.bat != null ? ' · 🔋 ' + m.bat + '%' : '') : 'nav signāla'}</div></div><button class="btn sm danger" data-del="${esc(t.dev)}">✕</button></div>`; }).join('') +
-    '<button class="btn" id="trkAdd" style="width:100%">＋ Pievienot GPS trackeri</button>';
+    Object.values(S.trackers || {}).map(t => { const m = S.members['trk-' + t.dev]; return `<div class="item" data-dev="${esc(t.dev)}"><div class="av" style="background:${esc(t.color)}">${t.role === 'dog' ? '🐕' : '📡'}</div><div class="meta"><div>${esc(t.name)}</div><div>${t.secured ? '🔒 ' : '⚠ bez atslēgas · '}ID ${esc(t.dev)} · ${m && m.t ? ago(m.t) + (m.bat != null ? ' · 🔋 ' + m.bat + '%' : '') : 'nav signāla'}</div></div><button class="btn sm danger" data-del="${esc(t.dev)}">✕</button></div>`; }).join('') +
+    (isAdminMe() ? '<button class="btn" id="trkAdd" style="width:100%">＋ Pievienot GPS trackeri</button>' : '');
   const ta = $('#trkAdd'); if (ta) ta.onclick = trackerSheet;
   // torņi
   const stands = Object.values(S.markers).filter(m => m.type === 'stand').sort((a, b) => String(a.name).localeCompare(String(b.name), 'lv', { numeric: true }));
@@ -1023,6 +1057,7 @@ function renderTeam() {
 $('#memberList').onclick = e => { const it = e.target.closest('.item'); if (!it) return; const id = it.dataset.id; if (id === S.me.id) { showView('map'); myPos && map.setView([myPos.lat, myPos.lng], 16); } else memberSheet(id); };
 $('#trackerList').onclick = e => {
   const del = e.target.closest('[data-del]');
+  if (del && !isAdminMe()) return toast('Trackerus pārvalda medību vadītājs');
   if (del) { if (!del.dataset.ok) { del.dataset.ok = 1; del.textContent = 'Dzēst?'; return; } return Sync.send('tracker_del', { dev: del.dataset.del }); }
   const it = e.target.closest('.item'); if (!it) return; const m = S.members['trk-' + it.dataset.dev];
   if (m && m.lat != null) { showView('map'); map.setView([m.lat, m.lng], 16); } else toast('No šī trackera vēl nav saņemts signāls');
@@ -1043,13 +1078,13 @@ async function joinHunt(code, name, created, pass) {
     } catch (_) {}
   }
   if (S.hunt && S.hunt.code !== code) leaveHunt(true);
-  S.hunt = { code, name: name || 'Medības ' + code, status: 'plan', pass: pass || '' };
+  S.hunt = { code, name: name || 'Medības ' + code, status: 'plan', pass: pass || '', token: randToken(), admins: [] };
   S.trackers = {};
   S.members = {}; S.markers = {}; S.chat = []; S.zone = []; S.outbox = []; S.unread = 0;
   clearMapLayers();
   save(); renderAll();
   Sync.connect();
-  if (created) Sync.send('hunt', Object.assign({ name: S.hunt.name, status: 'plan' }, pass ? { pass } : {}));
+  if (created) Sync.send('hunt', Object.assign({ name: S.hunt.name, status: 'plan', claimOwner: true }, pass ? { pass } : {}));
   if (created) S.hunt.owner = S.me.id;
   pushMember(true);
   sendChat(`${S.me.name} pievienojās (${ROLES[S.me.role]})`, 'normal');
@@ -1066,7 +1101,7 @@ function askPassword(code, msg) {
     r.querySelector('#pwOk').onclick = async () => {
       const pw = r.querySelector('#pwIn').value.trim(); if (!pw) return;
       try {
-        const res = await fetch('api/hunt/' + encodeURIComponent(code) + '?id=' + S.me.id + '&k=' + encodeURIComponent(pw), { cache: 'no-store' });
+        const res = await fetch('api/hunt/' + encodeURIComponent(code) + '?k=' + encodeURIComponent(pw), { cache: 'no-store' });
         if (res.status === 403) { const e = (await res.json()).error; return toast(e === 'banned' ? 'Tu esi izslēgts no šīm medībām' : 'Nepareiza parole'); }
       } catch (_) {}
       closeSheet();
@@ -1121,10 +1156,8 @@ function planSheet() {
 }
 /* GPS trackeri (OsmAnd / Traccar protokols) */
 function trackerSheet() {
-  const url = location.origin + '/api/tracker';
   openSheet(`<h2>📡 GPS trackeris</h2>
-    <p class="muted" style="font-size:13px">Derīgs jebkurš trackeris vai lietotne, kas atbalsta <b>OsmAnd</b> protokolu (piem., <b>Traccar Client</b> uz veca telefona suņa vestē, daudzi GPS trackeri). Tajā iestati:<br>
-    Servera adrese: <b style="word-break:break-all">${esc(url)}</b><br>Ierīces ID: tas pats, ko ievadi zemāk.</p>
+    <p class="muted" style="font-size:13px">Derīgs jebkurš trackeris vai lietotne, kas atbalsta <b>OsmAnd</b> protokolu (piem., <b>Traccar Client</b> uz veca telefona suņa vestē, daudzi GPS trackeri). Pēc pievienošanas parādīsies slepena servera adrese, ko ievadīt trackerī.</p>
     <label>Ierīces ID<input id="tkDev" placeholder="piem., 123456 vai IMEI" autocomplete="off"></label>
     <label>Nosaukums<input id="tkName" placeholder="piem., Reksis"></label>
     <label>Veids<select id="tkRole"><option value="dog">Suns</option><option value="driver">Dzinējs</option><option value="hunter">Mednieks</option><option value="observer">Cits</option></select></label>
@@ -1133,8 +1166,16 @@ function trackerSheet() {
     r.querySelector('#tkOk').onclick = () => {
       const dev = r.querySelector('#tkDev').value.trim(); if (!dev) return toast('Ievadi ierīces ID');
       if (!Sync.server) return toast('Trackeriem vajag serveri');
-      Sync.send('tracker', { dev, name: r.querySelector('#tkName').value.trim() || 'Trackeris', role: r.querySelector('#tkRole').value, color: r.querySelector('#tkColor').value });
-      closeSheet(); toast('Trackeris pievienots — tas parādīsies kartē, tiklīdz sūtīs atrašanās vietu');
+      const key = randToken().slice(0, 16);
+      Sync.send('tracker', { dev, key, name: r.querySelector('#tkName').value.trim() || 'Trackeris', role: r.querySelector('#tkRole').value, color: r.querySelector('#tkColor').value });
+      const url = location.origin + '/api/tracker/' + key;
+      openSheet(`<h2>✅ Trackeris pievienots</h2>
+        <p>Ievadi trackerī (piem., Traccar Client):</p>
+        <div class="kv"><b>Servera adrese</b><span style="word-break:break-all;font-weight:700">${esc(url)}</span><b>Ierīces ID</b><span style="font-weight:700">${esc(dev)}</span></div>
+        <p class="muted" style="font-size:12px">Adresē ir slepena atslēga — bez tās neviens nevar sūtīt viltotu atrašanās vietu. Šī adrese tiek parādīta tikai tagad; ja to pazaudē, pievieno trackeri vēlreiz ar to pašu ID.</p>
+        <button class="btn primary" id="tkCopy" style="width:100%">Kopēt adresi</button>`, r2 => {
+        r2.querySelector('#tkCopy').onclick = async () => { try { await navigator.clipboard.writeText(url); toast('Nokopēts'); } catch (_) { toast(url, 8000); } };
+      });
     };
   });
 }
@@ -1246,7 +1287,7 @@ async function startReplay() {
   if (!S.hunt || !Sync.server) return toast('Atkārtošanai vajag medības ar serveri');
   let data;
   try {
-    const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/tracks?id=' + S.me.id + '&k=' + encodeURIComponent(S.hunt.pass || ''), { cache: 'no-store' });
+    const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/tracks?' + authQS(), { cache: 'no-store' });
     data = await r.json();
   } catch (_) { return toast('Neizdevās ielādēt kustības datus'); }
   const ids = Object.keys(data.tracks || {}).filter(id => data.tracks[id].length > 1);
@@ -1314,7 +1355,7 @@ const Push = {
       if (sub && S.pushKey && S.pushKey !== key) { await sub.unsubscribe(); sub = null; }
       if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
       S.pushKey = key;
-      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: S.me.id, k: S.hunt.pass || '', sub: sub.toJSON() }) });
+      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: S.me.id, t: S.hunt.token || '', k: S.hunt.pass || '', sub: sub.toJSON() }) });
       S.pushOn = r.ok; save();
       if (force && r.ok) toast('Paziņojumi ieslēgti 🔔');
     } catch (e) { console.warn('push', e); S.pushOn = false; if (force) toast('Neizdevās ieslēgt paziņojumus' + (/iPhone|iPad/.test(navigator.userAgent) ? ' — iPhone tie strādā tikai, ja aplikācija pievienota sākuma ekrānam' : '')); }
@@ -1510,6 +1551,7 @@ $('#btnLayers').onclick = () => {
   });
 };
 $('#btnZone').onclick = () => {
+  if (!isAdminMe()) return toast('Medību zonu maina medību vadītājs');
   showView('map');
   const before = S.zone.slice();
   setMode('zone', '✏ Pieskaries kartei, lai pievienotu robežas punktus', [
@@ -1519,7 +1561,8 @@ $('#btnZone').onclick = () => {
   ]);
   renderZone();
 };
-$('#btnZoneClear').onclick = () => { Sync.send('zone', { points: [] }); toast('Zona notīrīta'); };
+$('#btnZoneClear').onclick = () => {
+  if (!isAdminMe()) return toast('Medību zonu maina medību vadītājs'); Sync.send('zone', { points: [] }); toast('Zona notīrīta'); };
 
 /* Profils un iestatījumi */
 function renderSettings() {

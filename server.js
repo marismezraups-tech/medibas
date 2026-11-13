@@ -26,6 +26,7 @@ const sha = s => crypto.createHash('sha256').update(String(s)).digest('hex');
 
 /* ================= Glabāšana ================= */
 let rooms = {};            // code -> room
+let photos = {};           // 'CODE/markerId' -> dataURL (glabājas atsevišķi, lai medību dati paliktu mazi)
 let meta = {};             // { vapid: {pub, priv} }
 const dirty = new Set();   // istabas, kas jāsaglabā
 
@@ -36,20 +37,22 @@ const Store = {
         const r = await fetch(SB_URL + '/rest/v1/medibas_rooms?select=code,data', { headers: sbHeaders() });
         if (!r.ok) throw new Error('Supabase ' + r.status + ' ' + await r.text());
         for (const row of await r.json()) {
-          if (row.code === '__meta') meta = row.data || {}; else rooms[row.code] = row.data;
+          if (row.code === '__meta') meta = row.data || {};
+          else if (row.code.startsWith('ph:')) photos[row.code.slice(3)] = row.data && row.data.img;
+          else rooms[row.code] = row.data;
         }
         console.log('Supabase: ielādētas', Object.keys(rooms).length, 'medības');
         return;
       } catch (e) { console.error('Supabase ielāde neizdevās, izmantoju failu:', e.message); }
     }
-    try { const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); rooms = d.rooms || (d.__meta ? {} : d); meta = d.__meta || meta; } catch (_) {}
+    try { const d = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); rooms = d.rooms || (d.__meta ? {} : d); meta = d.__meta || meta; photos = d.photos || {}; } catch (_) {}
   },
   async flush() {
     if (!dirty.size) return;
     const codes = [...dirty]; dirty.clear();
     if (SB_URL && SB_KEY) {
-      const rows = codes.map(c => c === '__meta' ? { code: c, data: meta } : rooms[c] ? { code: c, data: rooms[c] } : null).filter(Boolean);
-      const del = codes.filter(c => c !== '__meta' && !rooms[c]);
+      const rows = codes.map(c => c === '__meta' ? { code: c, data: meta } : c.startsWith('ph:') ? (photos[c.slice(3)] ? { code: c, data: { img: photos[c.slice(3)] } } : null) : rooms[c] ? { code: c, data: rooms[c] } : null).filter(Boolean);
+      const del = codes.filter(c => c !== '__meta' && (c.startsWith('ph:') ? !photos[c.slice(3)] : !rooms[c]));
       try {
         if (rows.length) {
           const r = await fetch(SB_URL + '/rest/v1/medibas_rooms', { method: 'POST', headers: Object.assign(sbHeaders(), { 'Content-Type': 'application/json', Prefer: 'resolution=merge-duplicates' }), body: JSON.stringify(rows.map(x => Object.assign(x, { updated_at: new Date().toISOString() }))) });
@@ -58,7 +61,7 @@ const Store = {
         for (const c of del) await fetch(SB_URL + '/rest/v1/medibas_rooms?code=eq.' + encodeURIComponent(c), { method: 'DELETE', headers: sbHeaders() });
       } catch (e) { console.error('Supabase saglabāšana neizdevās:', e.message); codes.forEach(c => dirty.add(c)); }
     }
-    fs.writeFile(DATA_FILE, JSON.stringify({ rooms, __meta: meta }), () => {});
+    fs.writeFile(DATA_FILE, JSON.stringify({ rooms, __meta: meta, photos }), () => {});
   },
 };
 function sbHeaders() { return { apikey: SB_KEY, Authorization: 'Bearer ' + SB_KEY }; }
@@ -72,22 +75,37 @@ function room(code, create = true) {
   code = cleanCode(code);
   if (!code) return null;
   if (!rooms[code] && create) {
-    rooms[code] = { code, name: 'Medības ' + code, status: 'plan', start: '', meet: '', owner: '', passHash: '', banned: [], members: {}, markers: {}, chat: [], zone: [], trackers: {}, push: {}, tracks: {}, created: Date.now() };
+    rooms[code] = { code, name: 'Medības ' + code, status: 'plan', start: '', meet: '', owner: '', admins: [], passHash: '', banned: [], tokens: {}, members: {}, markers: {}, chat: [], zone: [], trackers: {}, push: {}, tracks: {}, created: Date.now() };
   }
   const r = rooms[code];
-  if (r) for (const [k, v] of Object.entries({ banned: [], trackers: {}, push: {}, tracks: {}, owner: '', passHash: '', start: '', meet: '' })) if (r[k] == null) r[k] = Array.isArray(v) ? [] : (typeof v === 'object' ? {} : v);
+  if (r) for (const [k, v] of Object.entries({ banned: [], admins: [], tokens: {}, trackers: {}, push: {}, tracks: {}, owner: '', passHash: '', start: '', meet: '' })) if (r[k] == null) r[k] = Array.isArray(v) ? [] : (typeof v === 'object' ? {} : v);
   return r;
 }
 // Tas, ko redz klienti (bez paroles, push abonementiem un trekiem)
 function publicRoom(r) {
-  const { passHash, push, tracks, banned, ...rest } = r;
-  return Object.assign(rest, { hasPass: !!passHash });
+  const { passHash, push, tracks, banned, tokens, ...rest } = r;
+  const trackers = {};
+  for (const [k, t] of Object.entries(r.trackers || {})) { const { keyHash, ...pub } = t; trackers[k] = Object.assign(pub, { secured: !!keyHash }); }
+  return Object.assign(rest, { hasPass: !!passHash, trackers });
 }
-function authorized(r, id, key) {
+/* Piekļuves pārbaude.
+ * Parole: ja medībām ir parole, tā jāzina.
+ * Dalībnieka atslēga: pirmajā pieprasījumā dalībnieka ID tiek piesaistīts slepenai atslēgai (glabā tikai jaucējvērtību),
+ * pēc tam ar šo ID var darboties tikai tas, kurš zina atslēgu — citi nevar uzdoties par vadītāju vai citu dalībnieku. */
+function authorized(r, id, key, token, register = true) {
   if (id && r.banned.includes(id)) return 'banned';
   if (r.passHash && sha(key || '') !== r.passHash) return 'password';
+  if (id) {
+    if (!token || String(token).length < 16) return 'token';
+    const h = sha(token);
+    if (r.tokens[id] && r.tokens[id] !== h) return 'token';
+    if (!r.tokens[id] && register) { r.tokens[id] = h; saveSoon(r.code); }
+  }
   return '';
 }
+const isAdmin = (r, id) => !r.owner || id === r.owner || r.admins.includes(id);
+const PLAN_TYPES = ['stand', 'drive'];
+function same(a, b, ignore) { const k = new Set([...Object.keys(a || {}), ...Object.keys(b || {})]); for (const x of k) if (!ignore.includes(x) && JSON.stringify(a[x]) !== JSON.stringify(b[x])) return false; return true; }
 
 function broadcast(code, ev) {
   const set = clients[code]; if (!set) return;
@@ -118,48 +136,81 @@ function apply(r, ev, sender) {
       if (ev.type === 'pos') addTrack(r, p.id, p);
       return true;
     case 'leave':
-      if (sender && p.id !== sender && sender !== r.owner) return false;
+      if (sender && p.id !== sender && !isAdmin(r, sender)) return false;
       delete r.members[p.id]; return true;
-    case 'marker':
-      if (!p.id) return false;
+    case 'marker': {
+      if (!p.id || !p.type) return false;
+      const old = r.markers[p.id];
+      if (sender && !isAdmin(r, sender)) {
+        if (PLAN_TYPES.includes(p.type) || (old && PLAN_TYPES.includes(old.type))) {
+          // ne-vadītājs drīkst tikai ieņemt brīvu torni sev vai atbrīvot savu
+          if (!old || old.type !== 'stand' || p.type !== 'stand') return false;
+          if (!same(old, p, ['assigned', 'updated', 'updatedBy', 'photo'])) return false;
+          if (!((p.assigned === sender && (!old.assigned || old.assigned === sender)) || (!p.assigned && old.assigned === sender))) return false;
+        } else if (old && old.by && old.by !== sender) return false;            // svešu atzīmi mainīt nedrīkst
+        if (!old && p.by && p.by !== sender) return false;
+      }
+      // foto glabā atsevišķi; atzīmē paliek tikai karodziņš
+      if (typeof p.photo === 'string' && p.photo.startsWith('data:image/')) {
+        if (p.photo.length > 900000) return false;
+        photos[r.code + '/' + p.id] = p.photo; saveSoon('ph:' + r.code + '/' + p.id); p.photo = String(Date.now());
+      } else if (p.photo && old && old.photo) p.photo = old.photo;
+      else if (!p.photo && old && old.photo && !p.photoRemoved) p.photo = old.photo;
+      if (!p.photo) { delete p.photo; if (photos[r.code + '/' + p.id]) { delete photos[r.code + '/' + p.id]; saveSoon('ph:' + r.code + '/' + p.id); } }
+      delete p.photoRemoved;
       r.markers[p.id] = p; return true;
-    case 'marker_del':
-      delete r.markers[p.id]; return true;
+    }
+    case 'marker_del': {
+      const old = r.markers[p.id]; if (!old) return false;
+      if (sender && !isAdmin(r, sender) && (PLAN_TYPES.includes(old.type) || (old.by && old.by !== sender))) return false;
+      delete r.markers[p.id];
+      if (photos[r.code + '/' + p.id]) { delete photos[r.code + '/' + p.id]; saveSoon('ph:' + r.code + '/' + p.id); }
+      return true;
+    }
     case 'chat':
       if (!p.id || r.chat.some(c => c.id === p.id)) return false;
+      if (sender && p.from !== sender) return false;                            // ziņu var sūtīt tikai savā vārdā
       r.chat.push(p); if (r.chat.length > MAX_CHAT) r.chat.splice(0, r.chat.length - MAX_CHAT);
       return true;
     case 'zone':
+      if (sender && !isAdmin(r, sender)) return false;
       r.zone = Array.isArray(p.points) ? p.points.slice(0, 500) : []; return true;
     case 'sos':
-      if (!p.id) return false;
+      if (!p.id || (sender && p.id !== sender)) return false;
       r.members[p.id] = Object.assign(r.members[p.id] || {}, { id: p.id, name: p.name || (r.members[p.id] || {}).name, sos: !!p.active, lat: p.lat, lng: p.lng, t: p.t });
       return true;
     case 'hunt': {
-      if (!r.owner && sender) r.owner = sender;          // pirmais, kas iestata medības, kļūst par īpašnieku
+      if (!r.owner && sender && p.claimOwner) r.owner = sender;   // izveidotājs (vai īpašnieks pēc servera restarta)
       const isOwner = !sender || sender === r.owner;
+      if (sender && !isAdmin(r, sender)) return false;           // medību iestatījumus maina tikai vadītājs
+      if (Array.isArray(p.admins) && isOwner) r.admins = p.admins.filter(x => typeof x === 'string').slice(0, 20);
       if (p.name) r.name = String(p.name).slice(0, 80);
       if (p.status) r.status = p.status;
       if (p.start != null) r.start = String(p.start).slice(0, 40);
       if (p.meet != null) r.meet = String(p.meet).slice(0, 120);
       if ('pass' in p && isOwner) r.passHash = p.pass ? sha(p.pass) : '';
-      ev.payload = { name: r.name, status: r.status, start: r.start, meet: r.meet, owner: r.owner, hasPass: !!r.passHash };
+      ev.payload = { name: r.name, status: r.status, start: r.start, meet: r.meet, owner: r.owner, admins: r.admins, hasPass: !!r.passHash };
       return true;
     }
     case 'kick':
-      if (sender && sender !== r.owner) return false;
+      if (sender && !isAdmin(r, sender)) return false;
       if (!p.id || p.id === r.owner) return false;
       if (!r.banned.includes(p.id)) r.banned.push(p.id);
-      delete r.members[p.id]; delete r.push[p.id];
+      delete r.members[p.id]; delete r.push[p.id]; delete r.tokens[p.id];
+      r.admins = r.admins.filter(x => x !== p.id);
       setTimeout(() => kickStream(r.code, p.id), 50);
       return true;
-    case 'tracker':
-      if (!p.dev) return false;
+    case 'tracker': {
+      if (!p.dev || (sender && !isAdmin(r, sender))) return false;
       p.dev = String(p.dev).slice(0, 64);
-      r.trackers[p.dev] = { dev: p.dev, name: String(p.name || 'Trackeris').slice(0, 40), role: p.role || 'dog', color: p.color || '#9b6b3c' };
-      ev.payload = r.trackers[p.dev];
+      const prev = r.trackers[p.dev] || {};
+      r.trackers[p.dev] = { dev: p.dev, name: String(p.name || 'Trackeris').slice(0, 40), role: p.role || 'dog', color: p.color || '#9b6b3c', keyHash: p.key ? sha(p.key) : prev.keyHash || '' };
+      const { keyHash, ...pub } = r.trackers[p.dev];
+      ev.payload = Object.assign(pub, { secured: !!keyHash });              // atslēga netiek izsūtīta citiem
       return true;
+    }
     case 'tracker_del':
+      if (sender && !isAdmin(r, sender)) return false;
       delete r.trackers[p.dev]; delete r.members['trk-' + p.dev]; return true;
   }
   return false;
@@ -234,7 +285,7 @@ function send(res, code, obj) {
 }
 
 // GPS trackeri: OsmAnd protokols (?id=&lat=&lon=...) vai Traccar Client JSON
-function trackerPing(q, body) {
+function trackerPing(q, body, key) {
   let d = { dev: q.get('id') || q.get('deviceid'), lat: +q.get('lat'), lng: +q.get('lon'), acc: +q.get('accuracy') || null, heading: q.get('bearing') != null ? +q.get('bearing') : null, bat: q.get('batt') != null ? Math.round(+q.get('batt')) : null, t: q.get('timestamp') ? (+q.get('timestamp') < 1e12 ? +q.get('timestamp') * 1000 : +q.get('timestamp')) : Date.now() };
   if ((!d.dev || isNaN(d.lat)) && body) {
     try {
@@ -246,6 +297,7 @@ function trackerPing(q, body) {
   d.dev = String(d.dev); let n = 0;
   for (const r of Object.values(rooms)) {
     const tr = r.trackers && r.trackers[d.dev]; if (!tr) continue;
+    if (tr.keyHash && sha(key || '') !== tr.keyHash) continue;              // aizsargātam trackerim vajag atslēgu adresē
     const ev = { type: 'pos', payload: { id: 'trk-' + d.dev, name: tr.name, role: tr.role, color: tr.color, tracker: true, lat: d.lat, lng: d.lng, acc: d.acc ? Math.round(d.acc) : null, heading: d.heading, bat: d.bat, t: d.t || Date.now() } };
     if (apply(r, ev)) { broadcast(r.code, ev); saveSoon(r.code); n++; }
   }
@@ -265,7 +317,7 @@ const server = http.createServer(async (req, res) => {
   // OsmAnd trackeri sūta uz saknes adresi ar ?id=&lat=&lon=
   if ((parts[0] === 'api' && parts[1] === 'tracker') || (url.pathname === '/' && q.get('id') && q.get('lat'))) {
     const body = req.method === 'POST' ? await readBody(req).catch(() => '') : '';
-    const n = trackerPing(q, body);
+    const n = trackerPing(q, body, parts[0] === 'api' ? parts[2] || q.get('key') : q.get('key'));
     res.writeHead(200, { 'Content-Type': 'text/plain' }); return res.end(n ? 'OK' : 'UNKNOWN DEVICE');
   }
 
@@ -277,6 +329,7 @@ const server = http.createServer(async (req, res) => {
       const code = cleanCode(parts[2]);
       const key = q.get('k') || req.headers['x-hunt-key'] || '';
       const id = q.get('id') || req.headers['x-member-id'] || '';
+      const tok = q.get('t') || req.headers['x-member-token'] || '';
 
       // Vai medības eksistē / vai vajag paroli (pirms pievienošanās)
       if (parts[3] === 'info') {
@@ -286,7 +339,7 @@ const server = http.createServer(async (req, res) => {
 
       const r = room(code);
       if (!r) return send(res, 400, { error: 'bad code' });
-      const deny = authorized(r, id, key);
+      const deny = authorized(r, id, key, tok);
 
       if (parts[3] === 'stream' && req.method === 'GET') {
         if (deny) return send(res, 403, { error: deny });
@@ -305,25 +358,37 @@ const server = http.createServer(async (req, res) => {
         try { body = JSON.parse(await readBody(req)); } catch (e) { return send(res, 400, { error: 'bad json' }); }
         const list = Array.isArray(body) ? body : (body.events || [body]);
         const sender = (!Array.isArray(body) && body.id) || id;
-        const d = authorized(r, sender, (!Array.isArray(body) && body.k) || key);
+        if (!sender) return send(res, 403, { error: 'token' });
+        const d = authorized(r, sender, (!Array.isArray(body) && body.k) || key, (!Array.isArray(body) && body.t) || tok);
         if (d) return send(res, 403, { error: d });
-        let n = 0;
-        for (const ev of list) {
-          if (!ev || typeof ev.type !== 'string') continue;
+        let n = 0; const rejected = [];
+        list.forEach((ev, i) => {
+          if (!ev || typeof ev.type !== 'string') return;
           const before = ev.type === 'hunt' ? { status: r.status } : ev.type === 'marker' && ev.payload ? r.markers[ev.payload.id] && Object.assign({}, r.markers[ev.payload.id]) : null;
           if (apply(r, ev, sender)) { broadcast(r.code, ev); notifyFor(r, ev, sender, before); n++; }
-        }
+          else if (['marker', 'marker_del', 'zone', 'hunt', 'kick', 'tracker', 'tracker_del'].includes(ev.type)) rejected.push(ev.type);
+        });
         if (n) saveSoon(r.code);
-        return send(res, 200, { ok: true, applied: n });
+        return send(res, 200, { ok: true, applied: n, rejected });
       }
 
       if (parts[3] === 'push' && req.method === 'POST') {
         try {
           const b = JSON.parse(await readBody(req));
-          if (authorized(r, b.id, b.k)) return send(res, 403, { error: 'denied' });
+          if (!b.id || authorized(r, b.id, b.k, b.t)) return send(res, 403, { error: 'denied' });
           if (b.sub && b.sub.endpoint && b.sub.keys) r.push[b.id] = { endpoint: b.sub.endpoint, keys: b.sub.keys }; else delete r.push[b.id];
           saveSoon(r.code); return send(res, 200, { ok: true });
         } catch (_) { return send(res, 400, { error: 'bad json' }); }
+      }
+
+      if (parts[3] === 'photo' && parts[4] && req.method === 'GET') {
+        if (deny) return send(res, 403, { error: deny });
+        const img = photos[r.code + '/' + parts[4]];
+        if (!img) return send(res, 404, { error: 'no photo' });
+        const m = img.match(/^data:(image\/[a-z]+);base64,(.*)$/);
+        if (!m) return send(res, 404, { error: 'bad photo' });
+        res.writeHead(200, { 'Content-Type': m[1], 'Cache-Control': 'private, max-age=31536000, immutable' });
+        return res.end(Buffer.from(m[2], 'base64'));
       }
 
       if (parts[3] === 'tracks' && req.method === 'GET') {
@@ -366,7 +431,10 @@ setInterval(() => {
     for (const id of Object.keys(r.members)) if (now - (r.members[id].t || 0) > 864e5) { delete r.members[id]; ch = true; }
     for (const id of Object.keys(r.tracks)) { const t = r.tracks[id]; if (t.length && now - t[t.length - 1][2] > 7 * 864e5) { delete r.tracks[id]; ch = true; } }
     const last = Math.max(r.created || 0, ...r.chat.map(c => c.t || 0), ...Object.values(r.markers).map(m => m.t || 0));
-    if (now - last > 30 * 864e5 && !(clients[code] && clients[code].size)) { delete rooms[code]; dirty.add(code); ch = true; }
+    if (now - last > 30 * 864e5 && !(clients[code] && clients[code].size)) {
+      delete rooms[code]; dirty.add(code); ch = true;
+      for (const k of Object.keys(photos)) if (k.startsWith(code + '/')) { delete photos[k]; dirty.add('ph:' + k); }
+    }
     if (ch) saveSoon(code);
   }
 }, 3600e3);
@@ -374,6 +442,8 @@ setInterval(() => {
 for (const sig of ['SIGTERM', 'SIGINT']) process.on(sig, async () => { clearTimeout(saveTimer); await Store.flush().catch(() => {}); process.exit(0); });
 
 Store.load().then(() => {
+  for (const r of Object.values(rooms)) for (const m of Object.values(r.markers || {}))
+    if (typeof m.photo === 'string' && m.photo.startsWith('data:image/')) { photos[r.code + '/' + m.id] = m.photo; m.photo = String(Date.now()); dirty.add('ph:' + r.code + '/' + m.id); dirty.add(r.code); }
   vapid();
   server.listen(PORT, () => console.log('Medību serveris: http://localhost:' + PORT + ' · glabāšana: ' + (SB_URL && SB_KEY ? 'Supabase' : 'fails')));
 });
