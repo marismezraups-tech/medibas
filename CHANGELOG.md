@@ -3,6 +3,9 @@
 Versija redzama aplikācijā: **Vairāk → Par → Versija**. Ja serverī ir jaunāka versija, aplikācija piedāvā “Atjaunot”.
 Jaunu versiju izlaižot: palielini `version` failā `package.json` **un** `APP_VERSION` failā `public/app.js`.
 
+## 1.7.2 — 2026-11-13
+- Jauna ātrā ziņa **“▶ Medības sākas”** (trauksmes ziņa — vibrācija, push paziņojums)
+
 ## 1.7.1 — 2026-11-13
 - Ātrā ziņa “Dzinējs beidzies” → **“Masts beidzies - ņemamies nost!”**; tā tiek sūtīta kā trauksmes ziņa (vibrācija, push paziņojums)
 
