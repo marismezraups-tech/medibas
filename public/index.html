@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="lv">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="theme-color" content="#1f2a1c">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Medības">
+<title>Medības — komandas medību aplikācija</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Augšējā josla -->
+<header id="topbar">
+  <div class="tb-left">
+    <div id="huntTitle">Nav medību</div>
+    <div id="huntSub"><span id="connDot" class="dot off"></span><span id="connText">Lokālais režīms</span> · <span id="statusText">—</span></div>
+  </div>
+  <div class="tb-right">
+    <div class="pill" id="sunPill" title="Saullēkts / saulriets">☀ —</div>
+    <div class="pill" id="windPill" title="Vējš">🌬 —</div>
+  </div>
+</header>
+
+<div id="sosBanner" class="hidden"></div>
+
+<main>
+  <!-- KARTE -->
+  <section id="view-map" class="view active">
+    <div id="map"></div>
+    <div id="crosshair" class="hidden">＋</div>
+    <div id="modeBar" class="hidden">
+      <span id="modeText"></span>
+      <div class="mb-btns" id="modeBtns"></div>
+    </div>
+    <div id="infoChip" class="hidden"></div>
+    <div class="fab-col right">
+      <button class="fab" id="btnLayers" title="Kartes slāņi">🗺</button>
+      <button class="fab" id="btnMeasure" title="Mērīt attālumu">📏</button>
+      <button class="fab" id="btnFollow" title="Sekot manai atrašanās vietai">◎</button>
+    </div>
+    <div class="fab-col left">
+      <button class="fab sos" id="btnSOS" title="Turi 2 sek. — SOS">SOS</button>
+      <button class="fab" id="btnTrack" title="Ierakstīt maršrutu">⏺</button>
+    </div>
+    <button class="fab big" id="btnAdd" title="Pievienot atzīmi">＋</button>
+  </section>
+
+  <!-- KOMANDA -->
+  <section id="view-team" class="view">
+    <div class="pad">
+      <div class="card" id="huntCard"></div>
+      <h3>Dalībnieki <span id="memberCount" class="muted"></span></h3>
+      <div id="memberList" class="list"></div>
+      <h3>Torņi un stāvvietas</h3>
+      <div id="standList" class="list"></div>
+    </div>
+  </section>
+
+  <!-- ČATS -->
+  <section id="view-chat" class="view">
+    <div id="chatList"></div>
+    <div id="quickMsgs"></div>
+    <form id="chatForm">
+      <input id="chatInput" placeholder="Ziņa komandai…" autocomplete="off" maxlength="500">
+      <button type="submit">➤</button>
+    </form>
+  </section>
+
+  <!-- ŽURNĀLS -->
+  <section id="view-log" class="view">
+    <div class="pad">
+      <div class="seg" id="logSeg">
+        <button data-f="harvest" class="on">Nomedīts</button>
+        <button data-f="obs">Novērojumi</button>
+        <button data-f="all">Viss</button>
+      </div>
+      <div id="logStats" class="stats"></div>
+      <div id="logList" class="list"></div>
+      <div class="row gap">
+        <button class="btn" id="btnExportCSV">⬇ CSV</button>
+        <button class="btn" id="btnExportGPX">⬇ GPX (atzīmes + treks)</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- VAIRĀK -->
+  <section id="view-more" class="view">
+    <div class="pad">
+      <div class="card">
+        <h3>Mans profils</h3>
+        <label>Vārds<input id="pfName" maxlength="40"></label>
+        <label>Loma
+          <select id="pfRole">
+            <option value="hunter">Mednieks (stāvvietā)</option>
+            <option value="driver">Dzinējs</option>
+            <option value="leader">Medību vadītājs</option>
+            <option value="dog">Suns (telefons uz suņa vestes)</option>
+            <option value="observer">Novērotājs</option>
+          </select>
+        </label>
+        <label>Krāsa<input id="pfColor" type="color"></label>
+        <button class="btn primary" id="pfSave">Saglabāt profilu</button>
+      </div>
+
+      <div class="card">
+        <h3>Šodienas dati</h3>
+        <div id="sunDetail" class="kv"></div>
+        <div id="weatherDetail" class="kv"></div>
+        <button class="btn" id="btnWeather">↻ Atjaunot laikapstākļus</button>
+      </div>
+
+      <div class="card">
+        <h3>Iestatījumi</h3>
+        <label class="sw"><input type="checkbox" id="setWake"> Neļaut ekrānam izslēgties</label>
+        <label class="sw"><input type="checkbox" id="setScent"> Rādīt smaržas konusu (pa vējam)</label>
+        <label class="sw"><input type="checkbox" id="setSectors" checked> Rādīt šaušanas sektorus</label>
+        <label class="sw"><input type="checkbox" id="setVibrate" checked> Vibrēt pie ziņām un SOS</label>
+        <label class="sw"><input type="checkbox" id="setCompass"> Izmantot kompasu (virziena bultiņa)</label>
+        <label>Atrašanās vietas sūtīšana
+          <select id="setInterval">
+            <option value="3">ik 3 s (dzinējiem, suņiem)</option>
+            <option value="5" selected>ik 5 s</option>
+            <option value="15">ik 15 s (taupa bateriju)</option>
+            <option value="60">ik 60 s</option>
+          </select>
+        </label>
+        <label class="sw"><input type="checkbox" id="setShare" checked> Kopīgot manu atrašanās vietu ar komandu</label>
+      </div>
+
+      <div class="card">
+        <h3>Medību zona</h3>
+        <p class="muted">Iezīmē medību platības robežu uz kartes. Redz visi komandas dalībnieki.</p>
+        <div class="row gap">
+          <button class="btn" id="btnZone">✏ Zīmēt zonu</button>
+          <button class="btn danger" id="btnZoneClear">Notīrīt</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Atvērt citā telefonā</h3>
+        <p class="muted">Noskenē ar telefona kameru, lai atvērtu šo aplikāciju.</p>
+        <button class="btn" id="btnAppQR">📱 Rādīt QR kodu</button>
+      </div>
+
+      <div class="card">
+        <h3>Par</h3>
+        <p class="muted">Medības v1.0 · Serveris: <span id="srvState">—</span>. Dati glabājas arī ierīcē, tāpēc aplikācija strādā bez sakariem; izmaiņas tiek nosūtītas, kad savienojums atjaunojas.</p>
+        <button class="btn danger" id="btnReset">Dzēst visus ierīces datus</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- Apakšējā navigācija -->
+<nav id="tabbar">
+  <button data-v="map" class="on"><span>🗺</span>Karte</button>
+  <button data-v="team"><span>👥</span>Komanda</button>
+  <button data-v="chat"><span>💬</span>Čats<b id="chatBadge" class="badge hidden">0</b></button>
+  <button data-v="log"><span>📓</span>Žurnāls</button>
+  <button data-v="more"><span>⚙</span>Vairāk</button>
+</nav>
+
+<!-- Apakšējā lapa (dialogi) -->
+<div id="sheetBg" class="hidden"></div>
+<div id="sheet" class="hidden"><div class="grab"></div><div id="sheetBody"></div></div>
+<div id="toast" class="hidden"></div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>
+<script src="app.js"></script>
+</body>
+</html>

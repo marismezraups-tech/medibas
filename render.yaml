@@ -1,0 +1,11 @@
+# Render Blueprint — bezmaksas publicēšana (https://render.com)
+services:
+  - type: web
+    name: medibas
+    runtime: node
+    plan: free
+    region: frankfurt
+    buildCommand: echo "Nav jābūvē — nav atkarību"
+    startCommand: node server.js
+    healthCheckPath: /api/ping
+    autoDeploy: true
