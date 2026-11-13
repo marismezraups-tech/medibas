@@ -3,7 +3,7 @@
  * čats, SOS, medību zona, maršruta ieraksts, saule/mēness, vējš, eksports.
  */
 'use strict';
-const APP_VERSION = '1.7.0';   // jāsakrīt ar package.json versiju
+const APP_VERSION = '1.7.1';   // jāsakrīt ar package.json versiju
 
 /* ================= Palīgfunkcijas ================= */
 const $ = s => document.querySelector(s);
@@ -70,7 +70,7 @@ const TYPES = {
   other:   { n: 'Cits',                i: '📍', c: '#888' },
 };
 const SPECIES = ['Alnis', 'Staltbriedis', 'Stirna', 'Mežacūka', 'Dambriedis', 'Lapsa', 'Jenots', 'Vilks', 'Lūsis', 'Bebrs', 'Zaķis', 'Āpsis', 'Cits'];
-const QUICK = ['Esmu vietā ✅', 'Sākam dzīt ▶', 'Dzīvnieks iet uz jums ⚠', 'Šāviens 💥', 'Trāpīts 🎯', 'Garām ✖', 'Suns pazudis 🐕', 'Vajadzīga palīdzība izvilkt', 'Dzinējs beidzies ⏹', 'Medības beigušās 🏁'];
+const QUICK = ['Esmu vietā ✅', 'Sākam dzīt ▶', 'Dzīvnieks iet uz jums ⚠', 'Šāviens 💥', 'Trāpīts 🎯', 'Garām ✖', 'Suns pazudis 🐕', 'Vajadzīga palīdzība izvilkt', 'Masts beidzies - ņemamies nost! ⏹', 'Medības beigušās 🏁'];
 const COLORS = ['#ff7a1a', '#3c8dde', '#5bd16b', '#e04f9a', '#ffd23f', '#9b59b6', '#1abc9c', '#e74c3c', '#f39c12', '#00bcd4'];
 
 /* ================= Stāvoklis ================= */
@@ -975,7 +975,7 @@ function renderQuick() {
     const b = e.target.closest('button'); if (!b) return;
     if (!S.hunt) return toast('Vispirms pievienojies medībām');
     if (b.dataset.loc) { if (!myPos) return toast('Nav GPS'); return sendChat('📍 Esmu šeit', 'normal', myPos); }
-    sendChat(b.textContent, /⚠|💥|🎯|🐕|palīdzība/.test(b.textContent) ? 'alert' : 'normal', myPos);
+    sendChat(b.textContent, /⚠|💥|🎯|🐕|palīdzība|Masts beidzies/.test(b.textContent) ? 'alert' : 'normal', myPos);
   };
 }
 function updateBadge() { const b = $('#chatBadge'); b.textContent = S.unread; b.classList.toggle('hidden', !S.unread); }

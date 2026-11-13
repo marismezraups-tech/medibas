@@ -1,6 +1,6 @@
 {
   "name": "medibas",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Komandas medību aplikācija (PWA) ar reāllaika sinhronizācijas serveri",
   "main": "server.js",
   "scripts": { "start": "node server.js", "test": "node tests/security.test.js" },
