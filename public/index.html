@@ -29,6 +29,7 @@
 </header>
 
 <div id="sosBanner" class="hidden"></div>
+<div id="sectorBanner" class="hidden"></div>
 
 <main>
   <!-- KARTE -->
@@ -59,6 +60,8 @@
       <div class="card" id="huntCard"></div>
       <h3>Dalībnieki <span id="memberCount" class="muted"></span></h3>
       <div id="memberList" class="list"></div>
+      <h3>GPS trackeri (suņi u.c.)</h3>
+      <div id="trackerList" class="list"></div>
       <h3>Torņi un stāvvietas</h3>
       <div id="standList" class="list"></div>
     </div>
@@ -84,6 +87,7 @@
       </div>
       <div id="logStats" class="stats"></div>
       <div id="logList" class="list"></div>
+      <button class="btn" id="btnReplay" style="width:100%;margin:10px 0">⏪ Medību atkārtošana (visu kustība kartē)</button>
       <div class="row gap">
         <button class="btn" id="btnExportCSV">⬇ CSV</button>
         <button class="btn" id="btnExportGPX">⬇ GPX (atzīmes + treks)</button>
@@ -115,6 +119,13 @@
         <div id="sunDetail" class="kv"></div>
         <div id="weatherDetail" class="kv"></div>
         <button class="btn" id="btnWeather">↻ Atjaunot laikapstākļus</button>
+      </div>
+
+      <div class="card">
+        <h3>Paziņojumi</h3>
+        <p class="muted">SOS, “Šāviens”, medību sākums/beigas un torņa piešķiršana pienāk kā telefona paziņojums arī tad, kad aplikācija ir aizvērta.</p>
+        <div class="kv"><b>Stāvoklis</b><span id="pushState">—</span></div>
+        <button class="btn primary" id="btnPush">🔔 Ieslēgt paziņojumus</button>
       </div>
 
       <div class="card">

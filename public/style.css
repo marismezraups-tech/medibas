@@ -146,3 +146,9 @@ body.tower #topbar, body.tower main, body.tower #tabbar, body.tower #sosBanner {
 #twSOS{color:#ff4a3a;border-color:#6a1a12;font-weight:700}
 #twSOS.hold{animation:hold 2s linear forwards}
 .tw-hint{font-size:11px;color:#4a1f1a;text-align:center;margin-top:8px}
+
+#sectorBanner{position:fixed;top:var(--tb);left:0;right:0;background:#e0b400;color:#000;padding:10px 12px;font-weight:800;z-index:1100;animation:pulse 1s infinite}
+#sosBanner:not(.hidden)+#sectorBanner{top:calc(var(--tb) + 42px)}
+.tw-sector{color:#ff3b2b!important;font-weight:800;border:1px solid #6a1a12;border-radius:8px;padding:8px;margin:8px 0!important}
+.leaflet-tooltip{background:#000c;color:#fff;border:0;font-size:11px;padding:2px 6px}
+.leaflet-tooltip-top:before{border-top-color:#000c}

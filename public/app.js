@@ -52,6 +52,7 @@ const TYPES = {
   feed:    { n: 'Barotava',            i: '🌾', c: '#7aa33a' },
   cam:     { n: 'Meža kamera',         i: '📷', c: '#5a5aa8' },
   danger:  { n: 'Bīstami / neiet',     i: '⚠️', c: '#e0b400' },
+  drive:   { n: 'Dzinēja līnija',      i: '➡️', c: '#e8541c' },
   other:   { n: 'Cits',                i: '📍', c: '#888' },
 };
 const SPECIES = ['Alnis', 'Staltbriedis', 'Stirna', 'Mežacūka', 'Dambriedis', 'Lapsa', 'Jenots', 'Vilks', 'Lūsis', 'Bebrs', 'Zaķis', 'Āpsis', 'Cits'];
@@ -94,12 +95,26 @@ const Sync = {
     this.disconnect();
     if (!S.hunt || !this.server) return setConn();
     setConn('wait');
-    const es = this.es = new EventSource('api/hunt/' + encodeURIComponent(S.hunt.code) + '/stream?id=' + S.me.id);
-    es.onopen = () => { this.connected = true; setConn('on'); this.flush(); pushMember(); };
-    es.onerror = () => { this.connected = false; setConn('wait'); };
+    const es = this.es = new EventSource('api/hunt/' + encodeURIComponent(S.hunt.code) + '/stream?id=' + S.me.id + '&k=' + encodeURIComponent(S.hunt.pass || ''));
+    es.onopen = () => { this.connected = true; setConn('on'); this.flush(); pushMember(); Push.register(); };
+    es.onerror = () => { this.connected = false; setConn('wait'); this.checkAccess(); };
     es.onmessage = e => { try { handle(JSON.parse(e.data), true); } catch (err) { console.warn(err); } };
   },
   disconnect() { if (this.es) this.es.close(); this.es = null; this.connected = false; },
+  // Ja savienojums neizdodas — pārbauda, vai nav vajadzīga parole vai lietotājs izslēgts
+  async checkAccess() {
+    if (this._chk || !S.hunt || !this.server) return; this._chk = true;
+    try {
+      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '?id=' + S.me.id + '&k=' + encodeURIComponent(S.hunt.pass || ''), { cache: 'no-store' });
+      if (r.status === 403) this.denied((await r.json()).error);
+    } catch (_) {}
+    setTimeout(() => this._chk = false, 5000);
+  },
+  denied(why) {
+    this.disconnect();
+    if (why === 'banned') { const n = S.hunt.name; leaveHunt(true); toast('Medību vadītājs tevi izslēdza no medībām „' + n + '”', 6000); }
+    else askPassword(S.hunt.code, S.hunt.pass ? 'Parole ir nomainīta vai nepareiza.' : 'Šīm medībām vajag paroli.');
+  },
   send(type, payload) {
     const ev = { type, payload };
     handle(ev, false);
@@ -114,8 +129,9 @@ const Sync = {
     this._busy = true;
     const batch = S.outbox.slice(0, 50);
     try {
-      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(batch) });
+      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/event', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: S.me.id, k: S.hunt.pass || '', events: batch }) });
       if (r.ok) { S.outbox = S.outbox.filter(e => !batch.includes(e)); save(); }
+      else if (r.status === 403) { this._busy = false; return this.denied((await r.json()).error); }
     } catch (_) {}
     this._busy = false;
     if (S.outbox.length && this.connected) setTimeout(() => this.flush(), 1000);
@@ -154,7 +170,9 @@ function handle(ev, remote) {
         if (p.name && p.name !== 'Medības ' + S.hunt.code) S.hunt.name = p.name;
         else if (p.name !== S.hunt.name) S.outbox.unshift({ type: 'hunt', payload: { name: S.hunt.name } });
         S.hunt.status = p.status || S.hunt.status;
+        Object.assign(S.hunt, { owner: p.owner || '', hasPass: !!p.hasPass, start: p.start || '', meet: p.meet || '' });
       }
+      S.trackers = p.trackers || {};
       // pārliek atpakaļ neapstiprinātās lokālās izmaiņas
       for (const o of S.outbox) if (o.type !== 'chat') handle(o, false);
       Object.values(S.markers).forEach(toJournal);
@@ -162,11 +180,15 @@ function handle(ev, remote) {
     }
     case 'pos': case 'member':
       S.members[p.id] = Object.assign(S.members[p.id] || {}, p);
-      renderMember(p.id); throttleLists(); break;
+      renderMember(p.id); throttleLists(); sectorsSoon(); break;
     case 'leave':
       delete S.members[p.id]; renderMember(p.id); throttleLists(); break;
     case 'marker': {
       const isNew = !S.markers[p.id];
+      const prevAssigned = S.markers[p.id] && S.markers[p.id].assigned;
+      if (remote && p.type === 'stand' && p.assigned === S.me.id && prevAssigned !== S.me.id && p.updatedBy !== S.me.id) {
+        setTimeout(() => { toast('🪜 Tev piešķirts tornis ' + (p.name || '') + ' — atver to kartē', 6000); vibrate([200, 100, 200]); notify('Tev piešķirts tornis ' + (p.name || ''), 'stand'); }, 100);
+      }
       S.markers[p.id] = p; renderMarker(p.id); toJournal(p); throttleLists();
       if (remote && isNew && p.by !== S.me.id && ['harvest', 'shot', 'danger', 'blood'].includes(p.type)) {
         toast(TYPES[p.type].i + ' ' + (p.byName || '') + ': ' + TYPES[p.type].n + (p.species ? ' — ' + p.species : '')); vibrate(200);
@@ -174,6 +196,7 @@ function handle(ev, remote) {
       break;
     }
     case 'marker_del':
+      sectorsSoon();
       delete S.markers[p.id]; renderMarker(p.id); throttleLists(); break;
     case 'chat':
       if (S.chat.some(c => c.id === p.id)) break;
@@ -181,7 +204,7 @@ function handle(ev, remote) {
       if (remote && p.from !== S.me.id) {
         if (current !== 'chat') { S.unread++; updateBadge(); }
         vibrate(p.kind === 'alert' ? [200, 100, 200] : 80);
-        notify(p.name + ': ' + p.text);
+        notify(p.name + ': ' + p.text, p.kind === 'alert' ? 'alert' : 'chat');
         if (current !== 'chat') toast('💬 ' + p.name + ': ' + p.text);
       }
       renderChat(); towerSoon(); break;
@@ -190,11 +213,22 @@ function handle(ev, remote) {
     case 'sos':
       S.members[p.id] = Object.assign(S.members[p.id] || { id: p.id, name: p.name }, { sos: !!p.active, lat: p.lat, lng: p.lng, t: p.t, name: p.name || (S.members[p.id] || {}).name });
       renderMember(p.id); renderSOS(); throttleLists();
-      if (remote && p.active && p.id !== S.me.id) { vibrate([500, 200, 500, 200, 500]); notify('🆘 SOS: ' + p.name); }
+      if (remote && p.active && p.id !== S.me.id) { vibrate([500, 200, 500, 200, 500]); notify('🆘 SOS: ' + p.name, 'sos'); }
       break;
     case 'hunt':
-      if (S.hunt) { if (p.name) S.hunt.name = p.name; if (p.status) S.hunt.status = p.status; }
-      renderHeader(); renderTeam(); break;
+      if (S.hunt) {
+        if (p.name) S.hunt.name = p.name; if (p.status) S.hunt.status = p.status;
+        for (const k of ['owner', 'start', 'meet']) if (p[k] != null) S.hunt[k] = p[k];
+        if (p.hasPass != null) S.hunt.hasPass = p.hasPass;
+        if ('pass' in p && !remote) S.hunt.pass = p.pass;   // īpašnieks iestatīja paroli
+      }
+      renderHeader(); renderTeam(); renderTower(); sectorsSoon(); break;
+    case 'kicked':
+      Sync.denied('banned'); break;
+    case 'tracker':
+      S.trackers = S.trackers || {}; S.trackers[p.dev] = p; renderTeam(); break;
+    case 'tracker_del':
+      if (S.trackers) delete S.trackers[p.dev]; delete S.members['trk-' + p.dev]; renderMember('trk-' + p.dev); renderTeam(); break;
   }
   save();
 }
@@ -204,8 +238,9 @@ function toJournal(m) {
   S.journal[m.id] = Object.assign({}, m, { hunt: S.hunt ? S.hunt.name : '' });
 }
 
-function notify(body) {
+function notify(body, kind) {
   if (document.visibilityState === 'visible') return;
+  if (S.pushOn && ['sos', 'alert', 'stand'].includes(kind)) return; // tos jau atsūta serveris kā push
   if ('Notification' in window && Notification.permission === 'granted') {
     navigator.serviceWorker?.ready.then(r => r.showNotification('Medības', { body, icon: 'icons/icon-192.png', tag: 'medibas', renotify: true })).catch(() => {});
   }
@@ -245,7 +280,7 @@ const activeOverlays = {};
 
 /* Izveido slāni; WMS slānim, ja galvenais serveris neatbild, automātiski pārslēdzas uz rezerves serveri */
 function makeLayer(def, pane) {
-  const base = Object.assign({ crossOrigin: true }, def.o, pane ? { pane } : {});
+  const base = Object.assign({}, def.o, pane ? { pane } : {});
   if (!def.wms) return L.tileLayer(def.url, base);
   const w = def.wms;
   const lyr = L.tileLayer.wms(w.url, Object.assign(base, { layers: w.layers, styles: '', format: w.format || 'image/png', transparent: !!w.transparent, version: '1.3.0' }));
@@ -324,7 +359,9 @@ function renderMarker(id) {
   if (!mapVisible()) { mapDirty = true; return; }
   const m = S.markers[id];
   if (sectorLayers[id]) { map.removeLayer(sectorLayers[id]); delete sectorLayers[id]; }
-  if (!m) { if (mkLayers[id]) { map.removeLayer(mkLayers[id]); delete mkLayers[id]; } return; }
+  if (!m || m.type === 'drive') { if (mkLayers[id]) { map.removeLayer(mkLayers[id]); delete mkLayers[id]; } }
+  if (!m) return;
+  if (m.type === 'drive') { mkLayers[id] = driveLayer(m).addTo(map); return; }
   if (!mkLayers[id]) {
     mkLayers[id] = L.marker([m.lat, m.lng], { icon: markerIcon(m) }).addTo(map);
     mkLayers[id].on('click', () => markerSheet(id));
@@ -337,6 +374,22 @@ function renderMarker(id) {
   }
 }
 
+/* Dzinēja līnija: raustīta līnija ar bultu galā un nosaukumu sākumā */
+function driveLayer(m) {
+  const pts = (m.pts && m.pts.length ? m.pts : [[m.lat, m.lng]]).map(p => [p[0], p[1]]);
+  const g = L.layerGroup();
+  const line = L.polyline(pts, { color: '#e8541c', weight: 5, opacity: .9, dashArray: '10 8' }).addTo(g);
+  line.on('click', () => markerSheet(m.id));
+  if (pts.length >= 2) {
+    const a = { lat: pts[pts.length - 2][0], lng: pts[pts.length - 2][1] }, b = { lat: pts[pts.length - 1][0], lng: pts[pts.length - 1][1] };
+    const brg = bearing(a, b), len = Math.min(60, Math.max(15, dist(a, b) / 3));
+    const l = dest(b, brg + 150, len), r = dest(b, brg - 150, len);
+    L.polygon([[b.lat, b.lng], [l.lat, l.lng], [r.lat, r.lng]], { color: '#e8541c', fillColor: '#e8541c', fillOpacity: 1, weight: 1 }).on('click', () => markerSheet(m.id)).addTo(g);
+  }
+  L.marker(pts[0], { icon: L.divIcon({ className: '', iconSize: [24, 24], iconAnchor: [12, 12], html: `<div style="position:relative"><div class="mk" style="width:24px;height:24px;font-size:12px;background:#e8541c">➡️</div><div class="mk-lbl" style="top:26px">${esc(m.name || 'Dzinējs')}</div></div>` }) }).on('click', () => markerSheet(m.id)).addTo(g);
+  return g;
+}
+
 function renderZone() {
   if (!mapVisible()) { mapDirty = true; return; }
   zoneLayer.clearLayers();
@@ -345,6 +398,10 @@ function renderZone() {
     (S.zone.length >= 3 ? L.polygon(ll, { color: '#ff7a1a', weight: 3, fillOpacity: .05, interactive: false }) : L.polyline(ll, { color: '#ff7a1a', weight: 3 })).addTo(zoneLayer);
   }
   if (mode === 'zone') S.zone.forEach(p => L.circleMarker(p, { radius: 6, color: '#fff', fillColor: '#ff7a1a', fillOpacity: 1 }).addTo(zoneLayer));
+  if (mode === 'drive' && drawPts.length) {
+    L.polyline(drawPts, { color: '#e8541c', weight: 5, dashArray: '10 8' }).addTo(zoneLayer);
+    drawPts.forEach(p => L.circleMarker(p, { radius: 6, color: '#fff', fillColor: '#e8541c', fillOpacity: 1 }).addTo(zoneLayer));
+  }
 }
 
 function renderAllMap() {
@@ -368,12 +425,23 @@ const STILL_AFTER = 120000, STILL_POLL = 60000;
 const Geo = {
   watchId: null, pollT: null, mode: 'off', anchor: null, anchorT: 0,
   err(err) { toast(err.code === 1 ? 'Atļauj piekļuvi atrašanās vietai, lai redzētu sevi kartē' : 'GPS signāls nav pieejams'); },
+  native() { const C = window.Capacitor; return C && C.isNativePlatform && C.isNativePlatform() && C.Plugins && C.Plugins.BackgroundGeolocation; },
   active() {
     clearInterval(this.pollT); this.pollT = null;
+    const BG = this.native();
+    if (BG) {
+      // Īstā aplikācija (Capacitor): atrašanās vieta tiek sūtīta arī ar izslēgtu ekrānu
+      if (!this.nativeId) BG.addWatcher({ backgroundMessage: 'Medības: tava atrašanās vieta tiek kopīgota ar komandu', backgroundTitle: 'Medības notiek', requestPermissions: true, stale: false, distanceFilter: 8 },
+        (loc, err) => { if (err) return this.err({ code: err.code === 'NOT_AUTHORIZED' ? 1 : 2 }); onPos({ coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy, heading: loc.bearing, speed: loc.speed } }); })
+        .then(id => this.nativeId = id);
+      if (this.mode !== 'active') { this.mode = 'active'; this.anchorT = Date.now(); renderPower(); }
+      return;
+    }
     if (this.watchId == null) this.watchId = navigator.geolocation.watchPosition(onPos, e => this.err(e), { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
     if (this.mode !== 'active') { this.mode = 'active'; this.anchorT = Date.now(); renderPower(); }
   },
   still() {
+    if (this.native()) return;   // vietējais spraudnis pats taupa bateriju (distanceFilter)
     if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; }
     clearInterval(this.pollT);
     this.pollT = setInterval(() => navigator.geolocation.getCurrentPosition(onPos, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 25000 }), STILL_POLL);
@@ -423,7 +491,7 @@ function onPos(pos) {
   }
   updateInfoChip();
   Geo.check(myPos);
-  towerSoon();
+  towerSoon(); sectorsSoon();
 }
 function pushMember(withPos) {
   if (!S.hunt) return;
@@ -480,7 +548,7 @@ function initCompass() {
 function compassSync() { (S.settings.compass && compassAllowed && mapVisible()) ? compassAdd() : compassRemove(); }
 
 /* ================= Režīmi (atzīme / mērīšana / zona) ================= */
-let mode = null, measurePts = [];
+let mode = null, measurePts = [], drawPts = [];
 function setMode(m, text, btns) {
   mode = m;
   $('#modeBar').classList.toggle('hidden', !m);
@@ -498,6 +566,8 @@ function onMapClick(e) {
     measurePts.push(p); drawMeasure();
   } else if (mode === 'zone') {
     S.zone.push([p.lat, p.lng]); renderZone();
+  } else if (mode === 'drive') {
+    drawPts.push([p.lat, p.lng]); renderZone();
   } else if (mode === 'place') {
     map.panTo(e.latlng);
   }
@@ -549,8 +619,8 @@ function markerForm(existing, pos) {
       <label>Svars, kg<input id="fWeight" type="number" inputmode="decimal" value="${esc(m.weight || '')}"></label>
       <label>Mednieks<input id="fHunter" value="${esc(m.hunter || S.me.name)}"></label>
     </div>
+    <label id="fNameBox">Nosaukums / Nr.<input id="fName" value="${esc(m.name || '')}" placeholder="piem., T-7 vai 1. dzinējs"></label>
     <div id="fStand">
-      <label>Nosaukums / Nr.<input id="fName" value="${esc(m.name || '')}" placeholder="piem., T-7"></label>
       <label>Piešķirts medniekam<select id="fAssign"><option value="">— brīvs —</option>${meOpt}${memberOpts}</select></label>
       <label>Šaušanas virziens: <b id="fDirV">${m.dir == null ? 'nav' : Math.round(m.dir) + '° ' + compass(m.dir)}</b>
         <input id="fDir" type="range" min="0" max="359" value="${m.dir ?? 0}"></label>
@@ -560,7 +630,12 @@ function markerForm(existing, pos) {
         <label>Attālums, m<input id="fRange" type="number" min="20" max="2000" value="${m.range}"></label>
       </div>
     </div>
+    <div id="fDrive" class="muted" style="font-size:13px">Pēc “Saglabāt” pieskaries kartei, lai iezīmētu dzinēja ceļu — pēdējais punkts būs bultas gals (virziens, kurā dzen).</div>
     <label>Piezīme<textarea id="fNote" rows="2">${esc(m.note || '')}</textarea></label>
+    <div id="fPhotoBox">
+      <label class="btn" style="display:inline-flex;align-items:center;gap:6px;color:var(--text);margin:4px 0">📷 ${m.photo ? 'Mainīt foto' : 'Pievienot foto'}<input id="fPhoto" type="file" accept="image/*" style="display:none"></label>
+      <img id="fPhotoPrev" src="${m.photo || ''}" class="${m.photo ? '' : 'hidden'}" style="display:block;max-width:100%;max-height:180px;border-radius:10px;margin-top:6px">
+    </div>
     <div class="muted" style="font-size:12px">📍 ${m.lat.toFixed(5)}, ${m.lng.toFixed(5)}</div>
     <div class="row gap" style="margin-top:12px">
       <button class="btn primary grow" id="fSave">Saglabāt</button>
@@ -572,6 +647,14 @@ function markerForm(existing, pos) {
       root.querySelector('#fCount').classList.toggle('hidden', m.type !== 'obs');
       root.querySelector('#fHarvest').classList.toggle('hidden', m.type !== 'harvest');
       root.querySelector('#fStand').classList.toggle('hidden', m.type !== 'stand');
+      root.querySelector('#fNameBox').classList.toggle('hidden', !['stand', 'drive'].includes(m.type));
+      root.querySelector('#fDrive').classList.toggle('hidden', m.type !== 'drive' || !!(m.pts && m.pts.length > 1));
+      root.querySelector('#fPhotoBox').classList.toggle('hidden', ['drive', 'stand', 'car'].includes(m.type));
+    };
+    root.querySelector('#fPhoto').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      try { m.photo = await shrinkPhoto(f); const im = root.querySelector('#fPhotoPrev'); im.src = m.photo; im.classList.remove('hidden'); }
+      catch (_) { toast('Foto neizdevās nolasīt'); }
     };
     vis();
     root.querySelector('#fType').onclick = e => { const b = e.target.closest('button'); if (!b) return; m.type = b.dataset.k; root.querySelectorAll('#fType button').forEach(x => x.classList.toggle('on', x === b)); vis(); };
@@ -588,8 +671,14 @@ function markerForm(existing, pos) {
     root.querySelector('#fSave').onclick = () => {
       const out = {
         id: m.id || uid(), type: m.type, lat: m.lat, lng: m.lng, note: root.querySelector('#fNote').value.trim(),
-        by: m.by || S.me.id, byName: m.byName || S.me.name, t: m.t || Date.now(), updated: Date.now(),
+        by: m.by || S.me.id, byName: m.byName || S.me.name, t: m.t || Date.now(), updated: Date.now(), updatedBy: S.me.id,
       };
+      if (m.photo && !['drive', 'stand', 'car'].includes(m.type)) out.photo = m.photo;
+      if (m.type === 'drive') {
+        out.name = (root.querySelector('#fName').value || '').trim() || m.name || '';
+        if (m.pts && m.pts.length > 1) { out.pts = m.pts; Sync.send('marker', out); closeSheet(); return toast('Saglabāts'); }
+        closeSheet(); return startDrive(out);
+      }
       if (['obs', 'harvest', 'shot', 'blood', 'dog', 'cam'].includes(m.type) && m.species) out.species = m.species;
       if (m.type === 'obs') out.count = Math.max(1, +root.querySelector('#fCnt').value || 1);
       if (m.type === 'harvest') Object.assign(out, { sex: root.querySelector('#fSex').value, age: root.querySelector('#fAge').value, weight: root.querySelector('#fWeight').value, hunter: root.querySelector('#fHunter').value.trim() });
@@ -600,6 +689,35 @@ function markerForm(existing, pos) {
       }
       closeSheet(); toast('Saglabāts');
     };
+  });
+}
+
+function startDrive(base) {
+  showView('map');
+  drawPts = [[base.lat, base.lng]];
+  setMode('drive', '➡️ Pieskaries kartei, lai iezīmētu dzinēja ceļu. Pēdējais punkts = virziens, kurā dzen.', [
+    ['Atsaukt', () => { if (drawPts.length > 1) drawPts.pop(); renderZone(); }],
+    ['Gatavs', () => {
+      if (drawPts.length < 2) return toast('Vajag vismaz 2 punktus');
+      const out = Object.assign({}, base, { pts: drawPts.slice(), lat: drawPts[0][0], lng: drawPts[0][1] });
+      drawPts = []; setMode(null); Sync.send('marker', out);
+      if (S.hunt) sendChat(`➡️ Dzinējs ${out.name || ''}: ${fmtDist(trackLen(out.pts.map(p => [p[0], p[1], 0])))} uz ${compass(bearing({ lat: out.pts[out.pts.length - 2][0], lng: out.pts[out.pts.length - 2][1] }, { lat: out.pts[out.pts.length - 1][0], lng: out.pts[out.pts.length - 1][1] }))}`, 'normal', { lat: out.lat, lng: out.lng });
+    }, 'primary'],
+    ['Atcelt', () => { drawPts = []; setMode(null); }],
+  ]);
+  renderZone();
+}
+/* Foto samazināšana līdz ~1024 px JPEG (~100 KB), lai ātri sinhronizētos arī vājā mobilajā tīklā */
+function shrinkPhoto(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image(), url = URL.createObjectURL(file);
+    img.onload = () => {
+      const k = Math.min(1, 1024 / Math.max(img.width, img.height));
+      const c = document.createElement('canvas'); c.width = Math.round(img.width * k); c.height = Math.round(img.height * k);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height); URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.72));
+    };
+    img.onerror = reject; img.src = url;
   });
 }
 
@@ -617,7 +735,9 @@ function markerSheet(id) {
     ['Pievienoja', (m.byName || '?') + ', ' + fmtTime(m.t)],
     d && ['No manis', d],
   ].filter(Boolean);
+  if (m.type === 'drive' && m.pts && m.pts.length > 1) rows.splice(1, 0, ['Garums', fmtDist(trackLen(m.pts.map(p => [p[0], p[1], 0])))]);
   openSheet(`<h2>${t.i} ${t.n}</h2><div class="kv">${rows.map(r => `<b>${r[0]}</b><span>${esc(r[1])}</span>`).join('')}</div>
+    ${m.photo ? `<img src="${m.photo}" style="width:100%;border-radius:12px;margin-bottom:10px">` : ''}
     <div class="row gap">
       ${m.type === 'stand' ? '<button class="btn primary" id="sTake">Ieņemt šo torni</button>' : ''}
       <button class="btn" id="sNav">🧭 Vadīt uz šejieni</button>
@@ -633,7 +753,7 @@ function markerSheet(id) {
     };
     const tk = root.querySelector('#sTake'); if (tk) tk.onclick = () => {
       Object.values(S.markers).filter(x => x.type === 'stand' && x.assigned === S.me.id && x.id !== id).forEach(x => Sync.send('marker', Object.assign({}, x, { assigned: '' })));
-      Sync.send('marker', Object.assign({}, m, { assigned: S.me.id, updated: Date.now() }));
+      Sync.send('marker', Object.assign({}, m, { assigned: S.me.id, updated: Date.now(), updatedBy: S.me.id }));
       if (S.hunt) sendChat(`Esmu tornī ${m.name || ''} ✅`, 'normal', { lat: m.lat, lng: m.lng });
       closeSheet();
     };
@@ -646,7 +766,10 @@ function memberSheet(id) {
   openSheet(`<h2>${esc(m.name)} ${m.sos ? '🆘' : ''}</h2><div class="kv">
     <b>Loma</b><span>${ROLES[m.role] || '—'}</span><b>Pēdējās ziņas</b><span>${ago(m.t)} atpakaļ</span>
     <b>Precizitāte</b><span>${m.acc ? '±' + m.acc + ' m' : '—'}</span><b>Baterija</b><span>${m.bat != null ? m.bat + '%' : 'nav zināms'}</span><b>No manis</b><span>${d}</span></div>
-    <div class="row gap"><button class="btn primary" id="mNav">🧭 Vadīt uz</button><button class="btn" id="mCenter">Rādīt kartē</button></div>`, root => {
+    <div class="row gap"><button class="btn primary" id="mNav">🧭 Vadīt uz</button><button class="btn" id="mCenter">Rādīt kartē</button>
+    ${isOwner() && id !== S.me.id && !m.tracker ? '<button class="btn danger" id="mKick">Izslēgt no medībām</button>' : ''}</div>`, root => {
+    const kb = root.querySelector('#mKick');
+    if (kb) kb.onclick = () => { if (!kb.dataset.ok) { kb.dataset.ok = 1; kb.textContent = 'Tiešām izslēgt?'; return; } Sync.send('kick', { id }); delete S.members[id]; renderMember(id); closeSheet(); toast(m.name + ' izslēgts. Ja vajag, nomaini arī medību paroli.'); };
     root.querySelector('#mNav').onclick = () => { closeSheet(); navigateTo(m, m.name, id); };
     root.querySelector('#mCenter').onclick = () => { closeSheet(); showView('map'); if (m.lat != null) map.setView([m.lat, m.lng], 16); };
   });
@@ -684,6 +807,66 @@ function updateTrackChip() {
   chip.innerHTML = `⏺ Ieraksts: <b>${fmtDist(trackLen(S.track))}</b> · ${dur} min`;
   chip.classList.remove('hidden');
 }
+
+/* ================= Drošība: šaušanas sektori un pazuduši dalībnieki ================= */
+function inSector(st, p) {
+  if (st.dir == null || p.lat == null) return null;
+  const d = dist(st, p); if (d > (+st.range || 250) + 30 || d < 3) return null;
+  let diff = Math.abs(((bearing(st, p) - st.dir) % 360 + 540) % 360 - 180);
+  return diff <= (+st.arc || 90) / 2 + 5 ? d : null;
+}
+const sectorAlerted = {};
+function checkSectors() {
+  if (!S.hunt || S.hunt.status !== 'active') { showSectorBanner([]); return; }
+  const now = Date.now(), found = [];
+  const fresh = m => m && m.lat != null && now - (m.t || 0) < 180000;
+  const stands = Object.values(S.markers).filter(x => x.type === 'stand' && x.dir != null && x.assigned);
+  for (const st of stands) {
+    if (st.assigned === S.me.id) {
+      // kāds cits ir manā sektorā
+      for (const m of Object.values(S.members)) {
+        if (m.id === S.me.id || !fresh(m)) continue;
+        const d = inSector(st, m); if (d != null) found.push({ key: 'in-' + m.id, text: `⚠ ${m.name} ir TAVĀ šaušanas sektorā — ${fmtDist(d)} ${compass(bearing(st, m))}` });
+      }
+    } else if (myPos && Date.now() - myPos.t < 60000) {
+      // es esmu kāda cita sektorā
+      const d = inSector(st, myPos);
+      const owner = S.members[st.assigned];
+      if (d != null) found.push({ key: 'me-' + st.id, text: `⚠ Tu esi ${owner ? owner.name + ' (' + (st.name || 'tornis') + ')' : (st.name || 'torņa')} šaušanas sektorā — ${fmtDist(d)} no torņa` });
+    }
+  }
+  for (const f of found) {
+    if (!sectorAlerted[f.key] || now - sectorAlerted[f.key] > 60000) {
+      sectorAlerted[f.key] = now; vibrate([600, 150, 600, 150, 600]); notify(f.text, 'sector');
+    }
+  }
+  for (const k of Object.keys(sectorAlerted)) if (!found.some(f => f.key === k)) delete sectorAlerted[k];
+  showSectorBanner(found);
+}
+let lastSector = [];
+function showSectorBanner(found) {
+  lastSector = found;
+  const b = $('#sectorBanner');
+  b.innerHTML = found.map(f => esc(f.text)).join('<br>');
+  b.classList.toggle('hidden', !found.length);
+  const tw = $('#twSector'); if (tw) { tw.innerHTML = b.innerHTML; tw.classList.toggle('hidden', !found.length); }
+}
+let secT; function sectorsSoon() { clearTimeout(secT); secT = setTimeout(checkSectors, 300); }
+setInterval(checkSectors, 20000);
+
+const missingAlerted = {};
+function checkMissing() {
+  if (!S.hunt || S.hunt.status !== 'active' || !(isOwner() || S.me.role === 'leader')) return;
+  const now = Date.now();
+  for (const m of Object.values(S.members)) {
+    if (m.id === S.me.id || !m.name) continue;
+    const silent = now - (m.t || 0);
+    if (silent > 10 * 60000 && silent < 6 * 3600000) {
+      if (!missingAlerted[m.id]) { missingAlerted[m.id] = 1; const txt = `📵 ${m.name} nav sūtījis atrašanās vietu ${Math.round(silent / 60000)} min${m.bat != null ? ' (baterija bija ' + m.bat + '%)' : ''}`; toast(txt, 8000); vibrate([300, 100, 300]); notify(txt, 'missing'); }
+    } else delete missingAlerted[m.id];
+  }
+}
+setInterval(checkMissing, 60000);
 
 /* ================= SOS ================= */
 function initSOS(b) {
@@ -766,13 +949,14 @@ function renderTeam() {
   if (!S.hunt) {
     card.innerHTML = `<h3>Medības</h3><p class="muted">Izveido jaunas medības un nosūti kodu komandai, vai ievadi saņemto kodu.</p>
       <label>Medību nosaukums<input id="hName" placeholder="piem., Dzinējmedības Rūjienā"></label>
+      <label>Parole (nav obligāta)<input id="hPass" type="text" autocomplete="off" placeholder="bez paroles var pievienoties ikviens ar kodu"></label>
       <button class="btn primary" id="hCreate" style="width:100%">Izveidot medības</button>
       <label style="margin-top:16px">Pievienoties ar kodu<input id="hCode" placeholder="piem., K7Q2M" style="text-transform:uppercase" maxlength="12"></label>
       <button class="btn" id="hJoin" style="width:100%">Pievienoties</button>
       ${Sync.server ? '' : '<p class="muted" style="font-size:12px">⚠ Serveris nav pieejams — medības darbosies tikai šajā ierīcē.</p>'}`;
     $('#hCreate').onclick = () => {
       const code = Array.from({ length: 5 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'[Math.floor(Math.random() * 32)]).join('');
-      joinHunt(code, $('#hName').value.trim() || 'Medības ' + new Date().toLocaleDateString('lv-LV'), true);
+      joinHunt(code, $('#hName').value.trim() || 'Medības ' + new Date().toLocaleDateString('lv-LV'), true, $('#hPass').value.trim());
     };
     $('#hJoin').onclick = () => { const c = $('#hCode').value.toUpperCase().replace(/[^A-Z0-9]/g, ''); if (c.length < 3) return toast('Ievadi kodu'); joinHunt(c); };
   } else {
@@ -783,9 +967,15 @@ function renderTeam() {
         <button class="btn" id="hShare">📤 Dalīties</button>
         <button class="btn" id="hQR">▦ QR</button>
         <button class="btn ${S.hunt.status === 'active' ? '' : 'primary'}" id="hStatus">${S.hunt.status === 'active' ? '🏁 Beigt medības' : '▶ Sākt medības'}</button>
+        <button class="btn" id="hPlan">📅 Plāns</button>
+        ${isOwner() ? `<button class="btn" id="hPass">${S.hunt.hasPass ? '🔒 Parole' : '🔓 Parole'}</button>` : ''}
         <button class="btn" id="hRename">✏</button>
         <button class="btn danger" id="hLeave">Iziet</button>
-      </div>`;
+      </div>
+      ${planLine() ? `<div class="kv" style="margin-top:10px">${planLine()}</div>` : ''}
+      ${isOwner() ? '<p class="muted" style="font-size:12px;margin:8px 0 0">★ Tu esi medību vadītājs (vari mainīt paroli un izslēgt dalībniekus).</p>' : ''}`;
+    $('#hPlan').onclick = planSheet;
+    const hp = $('#hPass'); if (hp) hp.onclick = passSheet;
     $('#hShare').onclick = async () => {
       const text = `Pievienojies medībām "${S.hunt.name}": kods ${S.hunt.code}\n${link}`;
       try { if (navigator.share) await navigator.share({ title: 'Medības', text, url: link }); else { await navigator.clipboard.writeText(text); toast('Nokopēts'); } } catch (_) {}
@@ -816,6 +1006,11 @@ function renderTeam() {
       <div class="meta"><div>${esc(m.name)}${me ? ' (es)' : ''} ${m.sos ? '🆘' : ''}</div><div>${ROLES[m.role] || ''}${stand ? ' · 🪜 ' + esc(stand.name || 'tornis') : ''} · ${me ? 'tagad' : ago(m.t)}${(me ? batLevel() : m.bat) != null ? ` · <span style="color:${(me ? batLevel() : m.bat) < 20 ? 'var(--bad)' : 'inherit'}">🔋 ${me ? batLevel() : m.bat}%</span>` : ''}</div></div>
       <div class="muted" style="text-align:right;font-size:13px">${d}</div></div>`;
   }).join('') : '<div class="empty">Neviena dalībnieka</div>';
+  // GPS trackeri
+  $('#trackerList').innerHTML = !S.hunt ? '<div class="empty">Pievienojies medībām</div>' :
+    Object.values(S.trackers || {}).map(t => { const m = S.members['trk-' + t.dev]; return `<div class="item" data-dev="${esc(t.dev)}"><div class="av" style="background:${esc(t.color)}">${t.role === 'dog' ? '🐕' : '📡'}</div><div class="meta"><div>${esc(t.name)}</div><div>ID ${esc(t.dev)} · ${m && m.t ? ago(m.t) + (m.bat != null ? ' · 🔋 ' + m.bat + '%' : '') : 'nav signāla'}</div></div><button class="btn sm danger" data-del="${esc(t.dev)}">✕</button></div>`; }).join('') +
+    '<button class="btn" id="trkAdd" style="width:100%">＋ Pievienot GPS trackeri</button>';
+  const ta = $('#trkAdd'); if (ta) ta.onclick = trackerSheet;
   // torņi
   const stands = Object.values(S.markers).filter(m => m.type === 'stand').sort((a, b) => String(a.name).localeCompare(String(b.name), 'lv', { numeric: true }));
   $('#standList').innerHTML = stands.length ? stands.map(s => {
@@ -826,30 +1021,127 @@ function renderTeam() {
   }).join('') : '<div class="empty">Nav torņu. Pievieno tos kartē ar ＋ → 🪜</div>';
 }
 $('#memberList').onclick = e => { const it = e.target.closest('.item'); if (!it) return; const id = it.dataset.id; if (id === S.me.id) { showView('map'); myPos && map.setView([myPos.lat, myPos.lng], 16); } else memberSheet(id); };
+$('#trackerList').onclick = e => {
+  const del = e.target.closest('[data-del]');
+  if (del) { if (!del.dataset.ok) { del.dataset.ok = 1; del.textContent = 'Dzēst?'; return; } return Sync.send('tracker_del', { dev: del.dataset.del }); }
+  const it = e.target.closest('.item'); if (!it) return; const m = S.members['trk-' + it.dataset.dev];
+  if (m && m.lat != null) { showView('map'); map.setView([m.lat, m.lng], 16); } else toast('No šī trackera vēl nav saņemts signāls');
+};
 $('#standList').onclick = e => { const it = e.target.closest('.item'); if (!it) return; const m = S.markers[it.dataset.mk]; showView('map'); map.setView([m.lat, m.lng], 16); markerSheet(m.id); };
 
 let listT;
 function throttleLists() { towerSoon(); clearTimeout(listT); listT = setTimeout(() => { if (current === 'team') renderTeam(); if (current === 'log') renderLog(); }, 400); }
 
-function joinHunt(code, name, created) {
+async function joinHunt(code, name, created, pass) {
   if (!S.me.name) { showView('more'); toast('Vispirms ievadi savu vārdu profilā'); $('#pfName').focus(); return; }
+  if (!created && pass == null && Sync.server) {
+    try {
+      const info = await (await fetch('api/hunt/' + encodeURIComponent(code) + '/info', { cache: 'no-store' })).json();
+      if (info.hasPass) return askPassword(code, 'Medības „' + (info.name || code) + '” ir aizsargātas ar paroli.');
+      if (!info.exists) toast('Medības ar kodu ' + code + ' vēl nav izveidotas — tiek izveidotas jaunas', 4000);
+      name = name || info.name;
+    } catch (_) {}
+  }
   if (S.hunt && S.hunt.code !== code) leaveHunt(true);
-  S.hunt = { code, name: name || 'Medības ' + code, status: 'plan' };
+  S.hunt = { code, name: name || 'Medības ' + code, status: 'plan', pass: pass || '' };
+  S.trackers = {};
   S.members = {}; S.markers = {}; S.chat = []; S.zone = []; S.outbox = []; S.unread = 0;
   clearMapLayers();
   save(); renderAll();
   Sync.connect();
-  if (created) Sync.send('hunt', { name: S.hunt.name, status: 'plan' });
+  if (created) Sync.send('hunt', Object.assign({ name: S.hunt.name, status: 'plan' }, pass ? { pass } : {}));
+  if (created) S.hunt.owner = S.me.id;
   pushMember(true);
   sendChat(`${S.me.name} pievienojās (${ROLES[S.me.role]})`, 'normal');
   history.replaceState(null, '', location.pathname + '#' + code);
   toast(created ? 'Medības izveidotas — dalies ar kodu ' + code : 'Pievienojies medībām ' + code);
-  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().catch(() => {});
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission().then(() => Push.register()).catch(() => {});
+}
+const isOwner = () => !!(S.hunt && S.hunt.owner && S.hunt.owner === S.me.id);
+function askPassword(code, msg) {
+  showView('team');
+  openSheet(`<h2>🔒 Parole</h2><p class="muted">${esc(msg)}</p><label>Parole<input id="pwIn" type="text" autocomplete="off"></label>
+    <div class="row gap"><button class="btn primary grow" id="pwOk">Pievienoties</button><button class="btn" id="pwNo">Atcelt</button></div>`, r => {
+    r.querySelector('#pwIn').focus();
+    r.querySelector('#pwOk').onclick = async () => {
+      const pw = r.querySelector('#pwIn').value.trim(); if (!pw) return;
+      try {
+        const res = await fetch('api/hunt/' + encodeURIComponent(code) + '?id=' + S.me.id + '&k=' + encodeURIComponent(pw), { cache: 'no-store' });
+        if (res.status === 403) { const e = (await res.json()).error; return toast(e === 'banned' ? 'Tu esi izslēgts no šīm medībām' : 'Nepareiza parole'); }
+      } catch (_) {}
+      closeSheet();
+      if (S.hunt && S.hunt.code === code) { S.hunt.pass = pw; save(); Sync.connect(); } else joinHunt(code, null, false, pw);
+    };
+    r.querySelector('#pwNo').onclick = () => { closeSheet(); if (S.hunt && S.hunt.code === code && !Sync.connected) leaveHunt(true); };
+  });
+}
+function passSheet() {
+  openSheet(`<h2>Medību parole</h2><p class="muted">${S.hunt.hasPass ? 'Parole ir iestatīta. Nomainot to, jaunajiem dalībniekiem būs jāievada jaunā parole, bet pašreizējiem — arī (pēc atkārtota savienojuma).' : 'Bez paroles pievienoties var ikviens, kurš zina kodu.'}</p>
+    <label>Jaunā parole<input id="npw" type="text" autocomplete="off" value=""></label>
+    <div class="row gap"><button class="btn primary grow" id="npwOk">Saglabāt</button>${S.hunt.hasPass ? '<button class="btn danger" id="npwDel">Noņemt paroli</button>' : ''}</div>`, r => {
+    r.querySelector('#npwOk').onclick = () => { const v = r.querySelector('#npw').value.trim(); if (!v) return toast('Ievadi paroli'); Sync.send('hunt', { pass: v }); S.hunt.hasPass = true; closeSheet(); toast('Parole iestatīta — paziņo to komandai'); renderTeam(); };
+    const d = r.querySelector('#npwDel'); if (d) d.onclick = () => { Sync.send('hunt', { pass: '' }); S.hunt.hasPass = false; closeSheet(); renderTeam(); };
+  });
+}
+/* Medību plāns: sākuma laiks un pulcēšanās vieta */
+function planLine() {
+  if (!S.hunt) return '';
+  let out = '';
+  if (S.hunt.start) {
+    const t = new Date(S.hunt.start), diff = t - Date.now();
+    out += `<b>Sākums</b><span>${pad2(t.getDate())}.${pad2(t.getMonth() + 1)} ${hhmm(t)}${diff > 0 ? ' · pēc ' + untilStr(diff) : ''}</span>`;
+  }
+  if (S.hunt.meet) out += `<b>Pulcēšanās</b><span>${esc(S.hunt.meet)}</span>`;
+  const mine = Object.values(S.markers).find(x => x.type === 'stand' && x.assigned === S.me.id);
+  if (mine) out += `<b>Mans tornis</b><span>🪜 ${esc(mine.name || 'tornis')}${myPos ? ' · ' + fmtDist(dist(myPos, mine)) + ' ' + compass(bearing(myPos, mine)) : ''}</span>`;
+  return out;
+}
+function planSheet() {
+  const st = S.hunt.start ? S.hunt.start.slice(0, 16) : '';
+  const stands = Object.values(S.markers).filter(x => x.type === 'stand');
+  const people = Object.values(S.members).filter(m => m.name && !m.tracker);
+  if (!people.some(m => m.id === S.me.id)) people.unshift(S.me);
+  openSheet(`<h2>📅 Medību plāns</h2>
+    <label>Sākuma laiks<input id="plStart" type="datetime-local" value="${esc(st)}"></label>
+    <label>Pulcēšanās vieta / piezīmes<input id="plMeet" value="${esc(S.hunt.meet || '')}" placeholder="piem., pie mednieku mājas 7:30"></label>
+    <h3>Torņu sadale</h3>
+    ${stands.length ? stands.map(x => `<label>${esc(x.name || 'Tornis')}<select data-st="${esc(x.id)}"><option value="">— brīvs —</option>${people.map(m => `<option value="${esc(m.id)}" ${x.assigned === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></label>`).join('') : '<p class="muted">Vēl nav torņu — pievieno tos kartē ar ＋ → 🪜. Dalībnieki, kuriem piešķirsi torni, saņems paziņojumu.</p>'}
+    <button class="btn primary" id="plOk" style="width:100%">Saglabāt plānu</button>`, r => {
+    r.querySelector('#plOk').onclick = () => {
+      const start = r.querySelector('#plStart').value, meet = r.querySelector('#plMeet').value.trim();
+      if (start !== st || meet !== (S.hunt.meet || '')) Sync.send('hunt', { start: start ? new Date(start).toISOString() : '', meet });
+      r.querySelectorAll('select[data-st]').forEach(sel => {
+        const m = S.markers[sel.dataset.st];
+        if (m && (m.assigned || '') !== sel.value) Sync.send('marker', Object.assign({}, m, { assigned: sel.value, updated: Date.now(), updatedBy: S.me.id }));
+      });
+      if (start && start !== st) sendChat(`📅 Medības sāksies ${new Date(start).toLocaleString('lv-LV', { weekday: 'short', day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit' })}${meet ? ' · ' + meet : ''}`, 'normal');
+      closeSheet(); toast('Plāns saglabāts'); renderTeam();
+    };
+  });
+}
+/* GPS trackeri (OsmAnd / Traccar protokols) */
+function trackerSheet() {
+  const url = location.origin + '/api/tracker';
+  openSheet(`<h2>📡 GPS trackeris</h2>
+    <p class="muted" style="font-size:13px">Derīgs jebkurš trackeris vai lietotne, kas atbalsta <b>OsmAnd</b> protokolu (piem., <b>Traccar Client</b> uz veca telefona suņa vestē, daudzi GPS trackeri). Tajā iestati:<br>
+    Servera adrese: <b style="word-break:break-all">${esc(url)}</b><br>Ierīces ID: tas pats, ko ievadi zemāk.</p>
+    <label>Ierīces ID<input id="tkDev" placeholder="piem., 123456 vai IMEI" autocomplete="off"></label>
+    <label>Nosaukums<input id="tkName" placeholder="piem., Reksis"></label>
+    <label>Veids<select id="tkRole"><option value="dog">Suns</option><option value="driver">Dzinējs</option><option value="hunter">Mednieks</option><option value="observer">Cits</option></select></label>
+    <label>Krāsa<input id="tkColor" type="color" value="#9b6b3c"></label>
+    <button class="btn primary" id="tkOk" style="width:100%">Pievienot</button>`, r => {
+    r.querySelector('#tkOk').onclick = () => {
+      const dev = r.querySelector('#tkDev').value.trim(); if (!dev) return toast('Ievadi ierīces ID');
+      if (!Sync.server) return toast('Trackeriem vajag serveri');
+      Sync.send('tracker', { dev, name: r.querySelector('#tkName').value.trim() || 'Trackeris', role: r.querySelector('#tkRole').value, color: r.querySelector('#tkColor').value });
+      closeSheet(); toast('Trackeris pievienots — tas parādīsies kartē, tiklīdz sūtīs atrašanās vietu');
+    };
+  });
 }
 function leaveHunt(silent) {
   Sync.disconnect();
-  S.hunt = null; S.members = {}; S.markers = {}; S.chat = []; S.zone = []; S.outbox = []; S.unread = 0;
-  clearMapLayers(); save(); renderAll(); updateBadge();
+  S.hunt = null; S.members = {}; S.markers = {}; S.chat = []; S.zone = []; S.outbox = []; S.unread = 0; S.trackers = {};
+  clearMapLayers(); save(); renderAll(); updateBadge(); stopReplay();
   history.replaceState(null, '', location.pathname);
   if (!silent) toast('Izgāji no medībām');
 }
@@ -898,6 +1190,144 @@ $('#btnExportGPX').onclick = () => {
   const trks = [...S.tracks, S.track.length ? { name: 'Pašreizējais', pts: S.track } : null].filter(Boolean).map(t => `<trk><name>${x(t.name)}</name><trkseg>${t.pts.map(p => `<trkpt lat="${p[0]}" lon="${p[1]}"><time>${new Date(p[2]).toISOString()}</time></trkpt>`).join('')}</trkseg></trk>`).join('\n');
   download('medibas.gpx', 'application/gpx+xml', `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Medibas" xmlns="http://www.topografix.com/GPX/1/1">\n${wpts}\n${trks}\n</gpx>`);
 };
+
+/* ================= Karte bezsaistei ================= */
+const TILE_CACHE = 'medibas-tiles-v1', DL_MAX = 6000;
+function dlBounds() {
+  if (S.zone.length >= 3) return L.latLngBounds(S.zone.map(p => [p[0], p[1]])).pad(0.1);
+  return map.getBounds();
+}
+function tileRange(b, z) {
+  const nw = map.project(b.getNorthWest(), z).divideBy(256).floor(), se = map.project(b.getSouthEast(), z).divideBy(256).floor();
+  return { x0: nw.x, x1: se.x, y0: nw.y, y1: se.y, n: (se.x - nw.x + 1) * (se.y - nw.y + 1) };
+}
+function tileCount(maxZ) {
+  const b = dlBounds(); const z0 = Math.max(8, Math.min(map.getZoom() - 2, 12));
+  let n = 0; for (let z = z0; z <= maxZ; z++) n += tileRange(b, z).n;
+  return n * (1 + Object.keys(activeOverlays).length);
+}
+async function downloadArea(maxZ, stat, btn) {
+  if (!('caches' in window)) return toast('Šis pārlūks neatbalsta kartes saglabāšanu');
+  const total = tileCount(maxZ);
+  if (total > DL_MAX) { stat.textContent = `Par daudz flīžu (${total}). Izvēlies mazāku detalizāciju vai iezīmē mazāku medību zonu.`; return; }
+  try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (_) {}
+  btn.disabled = true;
+  const b = dlBounds(), z0 = Math.max(8, Math.min(map.getZoom() - 2, 12));
+  const layersToGet = [baseLayer, ...Object.values(activeOverlays)];
+  const urls = [];
+  for (const lyr of layersToGet) for (let z = z0; z <= maxZ; z++) {
+    const r = tileRange(b, z), maxN = lyr.options.maxNativeZoom || lyr.options.maxZoom || 19;
+    if (z > maxN || (lyr.options.minZoom && z < lyr.options.minZoom)) continue;
+    const saved = lyr._tileZoom; lyr._tileZoom = z;           // Leaflet ņem z no _tileZoom
+    for (let x = r.x0; x <= r.x1; x++) for (let y = r.y0; y <= r.y1; y++) { try { urls.push(lyr.getTileUrl(Object.assign(L.point(x, y), { z }))); } catch (_) {} }
+    lyr._tileZoom = saved;
+  }
+  const cache = await caches.open(TILE_CACHE);
+  let done = 0, ok = 0, skip = 0, i = 0;
+  const worker = async () => {
+    while (i < urls.length) {
+      const u = urls[i++];
+      try {
+        if (await cache.match(u)) skip++;
+        else { const res = await fetch(u, { mode: 'no-cors' }); if (res.ok || res.type === 'opaque') { await cache.put(u, res); ok++; } }
+      } catch (_) {}
+      done++; if (done % 10 === 0 || done === urls.length) stat.textContent = `Lejupielādē… ${done}/${urls.length}`;
+    }
+  };
+  await Promise.all(Array.from({ length: 6 }, worker));
+  btn.disabled = false;
+  stat.textContent = `✅ Gatavs: ${ok} jaunas, ${skip} jau bija saglabātas${urls.length - ok - skip ? ', ' + (urls.length - ok - skip) + ' neizdevās' : ''}.`;
+  toast('Karte saglabāta lietošanai bez interneta');
+}
+
+/* ================= Medību atkārtošana ================= */
+let replay = null;
+async function startReplay() {
+  if (!S.hunt || !Sync.server) return toast('Atkārtošanai vajag medības ar serveri');
+  let data;
+  try {
+    const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/tracks?id=' + S.me.id + '&k=' + encodeURIComponent(S.hunt.pass || ''), { cache: 'no-store' });
+    data = await r.json();
+  } catch (_) { return toast('Neizdevās ielādēt kustības datus'); }
+  const ids = Object.keys(data.tracks || {}).filter(id => data.tracks[id].length > 1);
+  if (!ids.length) return toast('Vēl nav kustības datu — tie krājas medību laikā');
+  let t0 = Infinity, t1 = 0;
+  ids.forEach(id => { const tr = data.tracks[id]; t0 = Math.min(t0, tr[0][2]); t1 = Math.max(t1, tr[tr.length - 1][2]); });
+  showView('map');
+  replay = { data, ids, t0, t1, t: t0, playing: false, layer: L.layerGroup().addTo(map), iv: null, speed: 60 };
+  const all = []; ids.forEach(id => data.tracks[id].forEach(p => all.push([p[0], p[1]])));
+  map.fitBounds(L.latLngBounds(all).pad(0.15));
+  setMode('replay', '', [
+    ['▶', () => toggleReplay(), 'primary'],
+    ['×60', e => { replay.speed = replay.speed === 60 ? 300 : replay.speed === 300 ? 15 : 60; e.target.textContent = '×' + replay.speed; }],
+    ['Aizvērt', () => stopReplay()],
+  ]);
+  $('#modeText').innerHTML = `<div id="rpTime"></div><input id="rpSlider" type="range" min="${t0}" max="${t1}" value="${t0}" step="1000" style="width:100%">`;
+  $('#rpSlider').oninput = e => { replay.t = +e.target.value; drawReplay(); };
+  drawReplay();
+}
+function toggleReplay() {
+  if (!replay) return;
+  replay.playing = !replay.playing;
+  $('#modeBtns button').textContent = replay.playing ? '⏸' : '▶';
+  clearInterval(replay.iv);
+  if (replay.playing) replay.iv = setInterval(() => {
+    replay.t = Math.min(replay.t1, replay.t + 250 * replay.speed);
+    if (replay.t >= replay.t1) toggleReplay();
+    $('#rpSlider').value = replay.t; drawReplay();
+  }, 250);
+}
+function drawReplay() {
+  const R = replay; if (!R) return;
+  R.layer.clearLayers();
+  for (const id of R.ids) {
+    const tr = R.data.tracks[id], who = R.data.who[id] || {};
+    let lo = 0, hi = tr.length - 1;
+    if (tr[0][2] > R.t) continue;
+    while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (tr[mid][2] <= R.t) lo = mid; else hi = mid - 1; }
+    const pts = tr.slice(0, lo + 1).map(p => [p[0], p[1]]);
+    L.polyline(pts, { color: who.color || '#fff', weight: 3, opacity: .75 }).addTo(R.layer);
+    L.circleMarker(pts[pts.length - 1], { radius: 8, color: '#fff', weight: 2, fillColor: who.color || '#ccc', fillOpacity: 1 }).bindTooltip(esc(who.name || '?'), { permanent: true, direction: 'top', offset: [0, -8] }).addTo(R.layer);
+  }
+  const d = new Date(R.t);
+  $('#rpTime').innerHTML = `⏪ <b>${pad2(d.getDate())}.${pad2(d.getMonth() + 1)} ${hhmm(d)}:${pad2(d.getSeconds())}</b> <span class="muted">· ${R.ids.length} dalībnieki</span>`;
+}
+function stopReplay() {
+  if (!replay) return;
+  clearInterval(replay.iv); map.removeLayer(replay.layer); replay = null;
+  if (mode === 'replay') setMode(null);
+}
+
+/* ================= Push paziņojumi (strādā arī, kad aplikācija aizvērta) ================= */
+const Push = {
+  supported() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; },
+  async register(force) {
+    if (!this.supported() || !S.hunt || !Sync.server) return renderPushState();
+    if (Notification.permission !== 'granted') {
+      if (!force) return renderPushState();
+      if (await Notification.requestPermission() !== 'granted') { toast('Paziņojumi nav atļauti — tos var atļaut pārlūka iestatījumos'); return renderPushState(); }
+    }
+    try {
+      const { key } = await (await fetch('api/push/key', { cache: 'no-store' })).json();
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (sub && S.pushKey && S.pushKey !== key) { await sub.unsubscribe(); sub = null; }
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64ToU8(key) });
+      S.pushKey = key;
+      const r = await fetch('api/hunt/' + encodeURIComponent(S.hunt.code) + '/push', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: S.me.id, k: S.hunt.pass || '', sub: sub.toJSON() }) });
+      S.pushOn = r.ok; save();
+      if (force && r.ok) toast('Paziņojumi ieslēgti 🔔');
+    } catch (e) { console.warn('push', e); S.pushOn = false; if (force) toast('Neizdevās ieslēgt paziņojumus' + (/iPhone|iPad/.test(navigator.userAgent) ? ' — iPhone tie strādā tikai, ja aplikācija pievienota sākuma ekrānam' : '')); }
+    renderPushState();
+  },
+};
+function b64ToU8(b64) { const s = atob((b64 + '='.repeat((4 - b64.length % 4) % 4)).replace(/-/g, '+').replace(/_/g, '/')); return Uint8Array.from(s, c => c.charCodeAt(0)); }
+function renderPushState() {
+  const el = $('#pushState'); if (!el) return;
+  el.textContent = !Push.supported() ? 'Šajā pārlūkā nav atbalstīts' + (/iPhone|iPad/.test(navigator.userAgent) ? ' (iPhone: pievieno aplikāciju sākuma ekrānam)' : '') :
+    !S.hunt ? 'Ieslēdzas, kad pievienojies medībām' : S.pushOn ? '🔔 Ieslēgti' : Notification.permission === 'denied' ? 'Aizliegti pārlūka iestatījumos' : 'Izslēgti';
+  $('#btnPush').classList.toggle('hidden', !Push.supported() || S.pushOn || !S.hunt);
+}
 
 /* ================= QR kods ================= */
 function showQR(title, text, sub) {
@@ -1026,8 +1456,11 @@ function renderTower() {
     ${wind ? `<div>${wind}</div>` : ''}
     <div class="tw-dim">${S.hunt ? esc(S.hunt.name) + ' · ' + ({ plan: 'plānotas', active: 'NOTIEK', ended: 'beigušās' }[S.hunt.status] || '') : 'Nav medību'}${stand ? ' · 🪜 ' + esc(stand.name || 'tornis') + (stand.dir != null ? ' (sektors ' + compass(stand.dir) + ')' : '') : ''}</div>
     <div class="tw-dim">${gps}${bat != null ? ' · 🔋 ' + bat + '%' : ''}</div>
+    <div id="twSector" class="tw-sector hidden"></div>
+    ${S.hunt && S.hunt.start && new Date(S.hunt.start) > now ? `<div>Sākums ${hhmm(new Date(S.hunt.start))} (pēc ${untilStr(new Date(S.hunt.start) - now)})</div>` : ''}
     <h4>Komanda</h4>${rows}
     <h4>Ziņas</h4>${msgs}`;
+  const tw = $('#twSector'); tw.innerHTML = lastSector.map(f => esc(f.text)).join('<br>'); tw.classList.toggle('hidden', !lastSector.length);
 }
 $('#btnTower').onclick = enterTower;
 $('#twExit').onclick = exitTower;
@@ -1064,7 +1497,14 @@ $('#btnLayers').onclick = () => {
   openSheet(`<h2>Kartes fons</h2>${Object.entries(groups).map(([g, list]) => `<div class="muted" style="font-size:12px;margin:10px 2px 6px">${esc(g)}</div><div class="list">${list.map(([k, l]) => `<button class="btn ${S.settings.layer === k ? 'primary' : ''}" data-k="${k}" style="text-align:left">${esc(l.n)}</button>`).join('')}</div>`).join('')}
     <h2 style="margin-top:18px">Pārklājumi <span class="muted" style="font-size:12px;font-weight:400">LVM GEO</span></h2>
     ${Object.entries(OVERLAYS).map(([k, o]) => `<label class="sw"><input type="checkbox" data-o="${k}" ${activeOverlays[k] ? 'checked' : ''}> ${esc(o.n)}${o.o.minZoom > 10 ? ` <span class="muted" style="font-size:11px">(redzams tuvinot)</span>` : ''}</label>`).join('')}
-    <p class="muted" style="font-size:12px">Apskatītās kartes daļas tiek saglabātas ierīcē un ir pieejamas arī bez interneta. LVM GEO dati: AS “Latvijas valsts meži”.</p>`, r => {
+    <h2 style="margin-top:18px">Karte bez interneta</h2>
+    <p class="muted" style="font-size:13px">Lejupielādē ${S.zone.length >= 3 ? '<b>medību zonu</b>' : '<b>redzamo apgabalu</b>'} ar izvēlēto fonu${Object.keys(activeOverlays).length ? ' un ieslēgtajiem pārklājumiem' : ''}, lai karte strādātu mežā bez zonas.</p>
+    <label>Detalizācija<select id="dlZoom">${[14, 15, 16, 17, 18].map(z => `<option value="${z}" ${z === 16 ? 'selected' : ''}>līdz ${z}. tuvinājumam — ${tileCount(z)} flīzes</option>`).join('')}</select></label>
+    <button class="btn" id="dlGo" style="width:100%">⬇ Lejupielādēt</button>
+    <div id="dlStat" class="muted" style="font-size:13px;margin-top:6px"></div>
+    <p class="muted" style="font-size:12px">LVM GEO dati: AS “Latvijas valsts meži”.</p>`, r => {
+    r.querySelector('#dlZoom').onclick = e => e.stopPropagation();
+    r.querySelector('#dlGo').onclick = e => { e.stopPropagation(); downloadArea(+r.querySelector('#dlZoom').value, r.querySelector('#dlStat'), r.querySelector('#dlGo')); };
     r.onclick = e => { const b = e.target.closest('button[data-k]'); if (!b) return; setLayer(b.dataset.k); closeSheet(); };
     r.querySelectorAll('input[data-o]').forEach(i => i.onchange = () => setOverlay(i.dataset.o, i.checked));
   });
@@ -1102,6 +1542,8 @@ $('#setPower').onchange = e => { S.settings.power = e.target.checked; save(); if
 $('#setInterval').onchange = e => { S.settings.interval = +e.target.value; save(); };
 $('#setShare').onchange = e => { S.settings.share = e.target.checked; save(); if (!e.target.checked && S.hunt) Sync.send('member', { id: S.me.id, name: S.me.name, role: S.me.role, color: S.me.color, lat: null, lng: null, t: Date.now() }); };
 $('#btnWeather').onclick = loadWeather;
+$('#btnPush').onclick = () => Push.register(true);
+$('#btnReplay').onclick = startReplay;
 $('#btnReset').onclick = () => { const b = $('#btnReset'); if (!b.dataset.ok) { b.dataset.ok = 1; b.textContent = 'Spied vēlreiz, lai dzēstu'; return; } localStorage.removeItem(KEY); location.reload(); };
 
 let wakeLock = null;
@@ -1127,7 +1569,7 @@ let pendingJoin = null;
   if (S.settings.compass) { if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') compassAllowed = false; else { compassAllowed = true; } compassSync(); }
   $('#btnTrack').classList.toggle('rec', S.recording); $('#btnTrack').textContent = S.recording ? '⏹' : '⏺';
   $('#btnFollow').classList.add('on');
-  renderAll(); renderSun(); renderWeather();
+  renderAll(); renderSun(); renderWeather(); renderPushState();
   startGeo(); wake();
   await Sync.probe();
   const hashCode = location.hash.slice(1).toUpperCase().replace(/[^A-Z0-9]/g, '');

@@ -1,0 +1,10 @@
+{
+  "appId": "lv.medibas.app",
+  "appName": "Medības",
+  "webDir": "../public",
+  "server": {
+    "url": "https://medibas.onrender.com",
+    "cleartext": false
+  },
+  "android": { "allowMixedContent": false }
+}

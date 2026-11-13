@@ -87,3 +87,40 @@ Ja kādreiz nejauši aizliedz atrašanās vietu:
 6. Medību laikā ieslēdz **Vairāk → Neļaut ekrānam izslēgties**. Fonā pārlūka aplikācija atrašanās vietu nesūta.
 
 **SOS:** pogu jātur 2 sekundes. Visi komandas telefoni vibrē un rāda, kur tu esi.
+
+---
+
+## Papildu iestatījumi (pēc izvēles)
+
+### 🔔 Paziņojumi ar aizvērtu aplikāciju
+**Vairāk → Paziņojumi → Ieslēgt paziņojumus** un atļauj. Android darbojas Chrome; iPhone — tikai, ja aplikācija pievienota sākuma ekrānam (iOS 16.4+).
+
+### 💾 Lai dati nepazustu (Supabase, bez maksas)
+Bezmaksas Render serveris aizmigstot aizmirst datus (tos atjauno telefoni, bet ne kustības trekus un push abonementus). Pastāvīgai glabāšanai:
+1. **supabase.com** → izveido kontu → **New project** (reģions: Frankfurt / Central EU).
+2. Projektā atver **SQL Editor** un izpildi:
+   ```sql
+   create table if not exists medibas_rooms (
+     code text primary key,
+     data jsonb not null,
+     updated_at timestamptz default now()
+   );
+   alter table medibas_rooms enable row level security;
+   ```
+3. **Project Settings → API**: nokopē **Project URL** un **service_role** atslēgu (slepena — nevienam nesūti).
+4. **Render** → serviss *medibas* → **Environment** → **Add Environment Variable**:
+   - `SUPABASE_URL` = Project URL
+   - `SUPABASE_KEY` = service_role atslēga
+   → **Save Changes** (serveris pārstartēsies).
+5. Pārbaude: atver `https://medibas.onrender.com/api/ping` — jābūt `"storage":"supabase"`.
+
+### 📡 GPS trackeri suņiem
+Der jebkura ierīce vai lietotne ar **OsmAnd** protokolu, piem., bezmaksas **Traccar Client** uz veca Android telefona suņa vestē:
+1. Aplikācijā: **Komanda → GPS trackeri → ＋ Pievienot** → ievadi ierīces ID (piem., `reksis1`), vārdu, veidu.
+2. Traccar Client: **Device identifier** = tas pats ID, **Server URL** = `https://medibas.onrender.com/api/tracker`, **Frequency** = 10 s, ieslēdz **Service status**.
+3. Suns parādās kartē kā dalībnieks; uz viņu strādā arī sektoru brīdinājumi.
+
+Specializētie suņu kaklasiksnu trackeri (Garmin u.c.) savus datus parasti nedod ārējiem serveriem; lētie GPS trackeri bieži atbalsta OsmAnd/HTTP — pārbaudi trackera instrukcijā.
+
+### 📱 Īsta aplikācija (atrašanās vieta arī ar izslēgtu ekrānu)
+Sk. `native/README.md` — vajag datoru ar Android Studio (iPhone — Mac ar Xcode).

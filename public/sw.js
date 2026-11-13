@@ -1,5 +1,5 @@
 // Service worker: aplikācijas čaula bezsaistē + kartes flīžu kešs
-const APP = 'medibas-app-v4', TILES = 'medibas-tiles-v1', MAX_TILES = 4000;
+const APP = 'medibas-app-v5', TILES = 'medibas-tiles-v1', MAX_TILES = 25000;
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 
@@ -38,7 +38,19 @@ async function trim(c) {
   try { const keys = await c.keys(); if (keys.length > MAX_TILES) for (const k of keys.slice(0, keys.length - MAX_TILES)) await c.delete(k); } finally { trimming = false; }
 }
 
+// Push paziņojumi no servera (SOS, trauksmes, medību statuss, torņa piešķiršana)
+self.addEventListener('push', e => {
+  let d = {}; try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data && e.data.text() }; }
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
+    if (cs.some(c => c.visibilityState === 'visible' && c.focused)) return; // aplikācija ir atvērta — tā pati parāda
+    return self.registration.showNotification(d.title || 'Medības', {
+      body: d.body || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: d.tag || 'medibas', renotify: true,
+      requireInteraction: !!d.urgent, vibrate: d.urgent ? [500, 200, 500, 200, 500] : [200], data: { hunt: d.hunt },
+    });
+  }));
+});
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  e.waitUntil(self.clients.matchAll({ type: 'window' }).then(cs => cs.length ? cs[0].focus() : self.clients.openWindow('./')));
+  const hunt = e.notification.data && e.notification.data.hunt;
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => cs.length ? cs[0].focus() : self.clients.openWindow('./' + (hunt ? '#' + hunt : ''))));
 });

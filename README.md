@@ -19,6 +19,18 @@ Progresīvā tīmekļa aplikācija (PWA), kas pēc funkcijām līdzinās Huntloc
 | **Saule un mēness** | Rīta un vakara krēsla, saullēkts, saulriets un mēness fāze. Tiek aprēķināti ierīcē. |
 | **Žurnāls** | Nomedīto dzīvnieku un novērojumu vēsture no visām medībām ar statistiku pa sugām. Eksports uz CSV (Excel) un GPX. |
 | **Baterijas taupīšana** | Ja 2 min nekusties, GPS atpūšas un ieslēdzas tikai uz brīdi ik 60 s; kustoties — atpakaļ precīzā režīmā. 🌙 **Torņa režīms**: melns ekrāns ar blāvi sarkanu tekstu (komanda, attālumi, ziņas, saulriets, vējš, ātrās pogas, SOS) — karte un kompass tad netiek darbināti. Komanda redz katra dalībnieka baterijas līmeni (Android). |
+| **Drošība sektoros** | Kad medības notiek: ja kāds (arī suns ar trackeri) ieiet tava torņa šaušanas sektorā — dzeltens brīdinājums un spēcīga vibrācija; ja **tu** ieej kāda cita sektorā — brīdina tevi. |
+| **Pazudušie** | Vadītājs saņem brīdinājumu, ja dalībnieks medību laikā 10 min nav sūtījis atrašanās vietu (ar pēdējo zināmo baterijas līmeni). |
+| **Push paziņojumi** | SOS, trauksmes ziņas, medību sākums/beigas un torņa piešķiršana pienāk kā telefona paziņojums arī ar aizvērtu aplikāciju (Web Push, bez ārējiem servisiem). |
+| **Dzinēju līnijas** | ＋ → ➡️ Dzinēja līnija: iezīmē ceļu ar bultu virzienā, kurā dzen; garums un virziens tiek paziņoti čatā. |
+| **Foto** | Novērojumiem, nomedītiem dzīvniekiem u.c. var pievienot foto (automātiski samazināts līdz ~100 KB). |
+| **Medību plāns** | 📅 Sākuma laiks ar atpakaļskaitīšanu, pulcēšanās vieta, torņu sadale — dalībnieki saņem paziņojumu par piešķirto torni. |
+| **Medību atkārtošana** | Žurnāls → ⏪: visu dalībnieku, suņu un dzinēju kustība kartē ar laika slīdni un ātrumu ×15/×60/×300 (serveris glabā trekus 7 dienas). |
+| **Karte bez interneta** | 🗺 → Lejupielādēt: medību zona (vai redzamais apgabals) ar izvēlēto fonu un pārklājumiem līdz 18. tuvinājumam. |
+| **Parole un izslēgšana** | Medībām var iestatīt paroli; vadītājs (izveidotājs) var izslēgt dalībnieku. |
+| **GPS trackeri** | Suņu u.c. trackeri ar OsmAnd/Traccar protokolu tiek rādīti kartē kā dalībnieki (sk. SAKT-SEIT.md). |
+| **Pastāvīgi dati** | Pēc izvēles — Supabase datubāze (bez maksas), lai medību dati un treki nepazustu, kad bezmaksas serveris aizmieg. |
+| **Īsta aplikācija** | Mape `native/` — Capacitor čaula Android/iOS ar fona atrašanās vietu (jābūvē ar Android Studio / Xcode). |
 | **Maršruta ieraksts** | Treks ar attālumu un ilgumu; eksportē GPX. |
 | **Citas iespējas** | Neļaut ekrānam izslēgties, atrašanās vietas sūtīšanas biežums (3–60 s), atrašanās vietas kopīgošanas izslēgšana. |
 
@@ -62,9 +74,8 @@ Telefona pārlūks GPS atļauj tikai caur **HTTPS**, tāpēc serverim vajag HTTP
 
 ## Ierobežojumi
 
-- Fonā pārlūka aplikācija atrašanās vietu nesūta (iOS/Android to aptur). Medību laikā ekrānam jāpaliek ieslēgtam; tam ir iestatījums "Neļaut ekrānam izslēgties".
-- Paziņojumi pienāk tikai tad, kad aplikācija ir atvērta vai minimizēta. Push paziņojumiem aizvērtā aplikācijā vajadzētu Web Push (VAPID) servera pusē.
-- Nav lietotāju autentifikācijas: medībām var pievienoties katrs, kurš zina kodu. Kods ir 5 simboli (~33 milj. kombināciju). Publiskam serverim ieteicams pievienot paroli vai ielūgumu tokenus.
+- Fonā pārlūka aplikācija atrašanās vietu nesūta (iOS/Android to aptur). Medību laikā ekrānam jāpaliek ieslēgtam (vai jāizmanto 🌙 torņa režīms). Pilnībā fonā strādā tikai īstā aplikācija no mapes `native/`.
+- Medību parole sargā no nejaušiem pievienotājiem, bet tā nav pilnvērtīga lietotāju autentifikācija (nav kontu).
 - LVM GEO slāņi nāk no `geoserver.lvmgeo.lv` (tā pati adrese, ko izmanto JOSM Latvijas kartēm). Ja tas neatbild, aplikācija automātiski pārslēdzas uz veco `lvmgeoserver.lvm.lv/geoserver/ows`. Adreses un slāņu nosaukumi ir `app.js` sākumā (`LVM`, `LAYERS`, `OVERLAYS`). Pirms publiskas vai komerciālas lietošanas pārbaudiet LVM GEO lietošanas noteikumus.
 - LVM meža kvartālu/nogabalu un medību iecirkņu slāņi publiskajā WMS netika atrasti, tāpēc tie nav iekļauti.
 
