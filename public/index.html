@@ -30,6 +30,7 @@
 
 <div id="sosBanner" class="hidden"></div>
 <div id="sectorBanner" class="hidden"></div>
+<div id="updBanner" class="hidden"></div>
 
 <main>
   <!-- KARTE -->
@@ -165,7 +166,9 @@
 
       <div class="card">
         <h3>Par</h3>
-        <p class="muted">Medības v1.0 · Serveris: <span id="srvState">—</span>. Dati glabājas arī ierīcē, tāpēc aplikācija strādā bez sakariem; izmaiņas tiek nosūtītas, kad savienojums atjaunojas.</p>
+        <div class="kv"><b>Versija</b><span id="appVer" style="font-weight:700">—</span><b>Serveris</b><span id="srvState">—</span></div>
+        <button class="btn" id="btnUpdate" style="margin-bottom:8px">🔄 Pārbaudīt atjauninājumus</button>
+        <p class="muted"> Dati glabājas arī ierīcē, tāpēc aplikācija strādā bez sakariem; izmaiņas tiek nosūtītas, kad savienojums atjaunojas.</p>
         <button class="btn danger" id="btnReset">Dzēst visus ierīces datus</button>
       </div>
     </div>

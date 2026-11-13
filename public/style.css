@@ -168,3 +168,5 @@ body.tower #topbar, body.tower main, body.tower #tabbar, body.tower #sosBanner {
 .wind-ar{position:relative;width:44px;height:44px;display:flex;align-items:center;justify-content:center;pointer-events:none}
 .wind-ar div{font-size:26px;line-height:1;text-shadow:0 0 3px #000,0 0 2px #000;font-weight:900}
 .wind-ar span{position:absolute;bottom:-2px;right:2px;font-size:11px;font-weight:800;color:#fff;text-shadow:0 0 3px #000}
+#updBanner{position:fixed;left:10px;right:10px;bottom:calc(var(--nav) + 10px);background:var(--panel);border:1px solid var(--accent);border-radius:12px;padding:10px 12px;z-index:1400;display:flex;align-items:center;gap:8px;flex-wrap:wrap;box-shadow:0 4px 16px #000a;font-size:14px}
+#updBanner.hidden{display:none}

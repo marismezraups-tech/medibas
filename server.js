@@ -16,6 +16,8 @@ const SB_URL = (process.env.SUPABASE_URL || '').replace(/\/$/, '');
 const SB_KEY = process.env.SUPABASE_KEY || '';
 const PUSH_SUB = process.env.PUSH_CONTACT || 'mailto:medibas@example.com';
 const MAX_CHAT = 300, MAX_TRACK = 4000;
+const VERSION = require('./package.json').version;
+const COMMIT = (process.env.RENDER_GIT_COMMIT || '').slice(0, 7);   // Render to iestata automātiski
 
 const MIME = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8',
@@ -322,7 +324,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (parts[0] === 'api') {
-    if (parts[1] === 'ping') return send(res, 200, { ok: true, t: Date.now(), storage: SB_URL && SB_KEY ? 'supabase' : 'file' });
+    if (parts[1] === 'ping') return send(res, 200, { ok: true, t: Date.now(), version: VERSION, commit: COMMIT, storage: SB_URL && SB_KEY ? 'supabase' : 'file' });
     if (parts[1] === 'push' && parts[2] === 'key') return send(res, 200, { key: vapid().pub });
 
     if (parts[1] === 'hunt' && parts[2]) {
@@ -445,7 +447,7 @@ Store.load().then(() => {
   for (const r of Object.values(rooms)) for (const m of Object.values(r.markers || {}))
     if (typeof m.photo === 'string' && m.photo.startsWith('data:image/')) { photos[r.code + '/' + m.id] = m.photo; m.photo = String(Date.now()); dirty.add('ph:' + r.code + '/' + m.id); dirty.add(r.code); }
   vapid();
-  server.listen(PORT, () => console.log('Medību serveris: http://localhost:' + PORT + ' · glabāšana: ' + (SB_URL && SB_KEY ? 'Supabase' : 'fails')));
+  server.listen(PORT, () => console.log('Medību serveris v' + VERSION + (COMMIT ? ' (' + COMMIT + ')' : '') + ': http://localhost:' + PORT + ' · glabāšana: ' + (SB_URL && SB_KEY ? 'Supabase' : 'fails')));
 });
 
 module.exports = { encryptPush, vapidAuth }; // testiem

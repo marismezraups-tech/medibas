@@ -3,6 +3,7 @@
  * čats, SOS, medību zona, maršruta ieraksts, saule/mēness, vējš, eksports.
  */
 'use strict';
+const APP_VERSION = '1.7.0';   // jāsakrīt ar package.json versiju
 
 /* ================= Palīgfunkcijas ================= */
 const $ = s => document.querySelector(s);
@@ -98,8 +99,10 @@ function save() { clearTimeout(saveT); saveT = setTimeout(() => { try { const { 
 const Sync = {
   server: false, es: null, connected: false,
   async probe() {
-    try { const r = await fetch('api/ping', { cache: 'no-store' }); this.server = r.ok && (await r.json()).ok; } catch (_) { this.server = false; }
-    $('#srvState').textContent = this.server ? 'pieejams' : 'nav (tikai lokāli)';
+    let info = {};
+    try { const r = await fetch('api/ping', { cache: 'no-store' }); info = r.ok ? await r.json() : {}; this.server = !!info.ok; } catch (_) { this.server = false; }
+    $('#srvState').textContent = this.server ? 'pieejams' + (info.version ? ' · v' + info.version + (info.commit ? ' (' + info.commit + ')' : '') : '') + (info.storage === 'supabase' ? ' · Supabase' : '') : 'nav (tikai lokāli)';
+    if (info.version && info.version !== APP_VERSION) offerUpdate(info.version);
     // ja serveris vēl "mostas" vai nav sakaru — mēģina vēlreiz ik 15 s
     clearTimeout(this._retry);
     if (!this.server) this._retry = setTimeout(async () => { if (await this.probe()) { renderTeam(); if (S.hunt) this.connect(); } }, 15000);
@@ -1374,6 +1377,28 @@ function renderPushState() {
     !S.hunt ? 'Ieslēdzas, kad pievienojies medībām' : S.pushOn ? '🔔 Ieslēgti' : Notification.permission === 'denied' ? 'Aizliegti pārlūka iestatījumos' : 'Izslēgti';
   $('#btnPush').classList.toggle('hidden', !Push.supported() || S.pushOn || !S.hunt);
 }
+
+/* ================= Versija un atjaunināšana ================= */
+let updateOffered = false;
+function offerUpdate(v) {
+  if (updateOffered) return; updateOffered = true;
+  const b = $('#updBanner');
+  b.innerHTML = `🆕 Pieejama jauna versija <b>v${esc(v)}</b> (tev v${APP_VERSION}) <button class="btn sm primary" id="updGo">Atjaunot</button>`;
+  b.classList.remove('hidden');
+  $('#updGo').onclick = updateApp;
+}
+async function updateApp() {
+  toast('Atjaunina…');
+  try {
+    // izdzēš saglabāto aplikācijas versiju (kartes un foto paliek) un ielādē jauno
+    for (const k of await caches.keys()) if (k.startsWith('medibas-app')) await caches.delete(k);
+    const reg = await navigator.serviceWorker?.getRegistration(); if (reg) await reg.update();
+  } catch (_) {}
+  location.reload();
+}
+$('#appVer').textContent = 'v' + APP_VERSION;
+$('#btnUpdate').onclick = async () => { await Sync.probe(); if (!updateOffered) { toast('Tev ir jaunākā versija v' + APP_VERSION); } };
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') Sync.probe(); });
 
 /* ================= QR kods ================= */
 function showQR(title, text, sub) {
