@@ -20,7 +20,7 @@
 <header id="topbar">
   <div class="tb-left">
     <div id="huntTitle">Nav medību</div>
-    <div id="huntSub"><span id="connDot" class="dot off"></span><span id="connText">Lokālais režīms</span> · <span id="statusText">—</span></div>
+    <div id="huntSub"><span id="connDot" class="dot off"></span><span id="connText">Lokālais režīms</span> · <span id="statusText">—</span><span id="powerText"></span></div>
   </div>
   <div class="tb-right">
     <div class="pill" id="sunPill" title="Saullēkts / saulriets">☀ —</div>
@@ -41,6 +41,7 @@
     </div>
     <div id="infoChip" class="hidden"></div>
     <div class="fab-col right">
+      <button class="fab" id="btnTower" title="Torņa režīms — tumšs ekrāns, taupa bateriju">🌙</button>
       <button class="fab" id="btnLayers" title="Kartes slāņi">🗺</button>
       <button class="fab" id="btnMeasure" title="Mērīt attālumu">📏</button>
       <button class="fab" id="btnFollow" title="Sekot manai atrašanās vietai">◎</button>
@@ -118,6 +119,7 @@
 
       <div class="card">
         <h3>Iestatījumi</h3>
+        <label class="sw"><input type="checkbox" id="setPower" checked> Automātiskā baterijas taupīšana (GPS atpūšas, kad stāvi uz vietas)</label>
         <label class="sw"><input type="checkbox" id="setWake"> Neļaut ekrānam izslēgties</label>
         <label class="sw"><input type="checkbox" id="setScent"> Rādīt smaržas konusu (pa vējam)</label>
         <label class="sw"><input type="checkbox" id="setSectors" checked> Rādīt šaušanas sektorus</label>
@@ -171,6 +173,23 @@
 <div id="sheetBg" class="hidden"></div>
 <div id="sheet" class="hidden"><div class="grab"></div><div id="sheetBody"></div></div>
 <div id="toast" class="hidden"></div>
+
+<!-- Torņa režīms -->
+<div id="tower" class="hidden">
+  <div id="twBody"></div>
+  <div id="twQuick">
+    <button data-t="Esmu vietā ✅">Esmu vietā</button>
+    <button data-t="Dzīvnieks iet uz jums ⚠" data-a="1">Iet uz jums ⚠</button>
+    <button data-t="Šāviens 💥" data-a="1">Šāviens</button>
+    <button data-t="Trāpīts 🎯" data-a="1">Trāpīts</button>
+    <button data-t="Garām ✖">Garām</button>
+  </div>
+  <div class="tw-foot">
+    <button id="twSOS">SOS (turi 2 s)</button>
+    <button id="twExit">Karte ↩</button>
+  </div>
+  <div class="tw-hint">Samazini ekrāna spilgtumu — melns ekrāns tērē vismazāk.</div>
+</div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js" defer></script>

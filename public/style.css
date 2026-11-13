@@ -126,3 +126,23 @@ label.sw input{width:22px;height:22px;accent-color:var(--accent)}
 .leaflet-control-attribution{font-size:9px;background:#0008!important;color:#bbb}
 .leaflet-control-attribution a{color:#ddd}
 .leaflet-control-scale-line{background:#000a;color:#fff;border-color:#fff}
+
+/* Torņa režīms: melns fons, blāvi sarkans teksts (saudzē redzi tumsā un OLED bateriju) */
+body.tower #topbar, body.tower main, body.tower #tabbar, body.tower #sosBanner { display:none !important }
+#tower{position:fixed;inset:0;background:#000;color:#b8483a;z-index:2000;display:flex;flex-direction:column;padding:calc(14px + env(safe-area-inset-top)) 16px calc(12px + env(safe-area-inset-bottom));overflow:auto;font-size:15px}
+#tower.hidden{display:none}
+#twBody{flex:1}
+#twBody>div{margin:3px 0}
+.tw-clock{font-size:56px;font-weight:200;line-height:1;margin-bottom:6px!important;color:#c4503f}
+.tw-dim{color:#6e2f27}
+#tower h4{margin:14px 0 4px;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#6e2f27;font-weight:600}
+.tw-row{display:grid;grid-template-columns:1fr auto auto;gap:10px;padding:3px 0;border-bottom:1px solid #1a0a08}
+.tw-row.sos,.tw-msg.alert{color:#ff3b2b;font-weight:700}
+.tw-msg{padding:2px 0}
+#twQuick{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+#twQuick button,.tw-foot button{background:#0d0504;color:#b8483a;border:1px solid #3a1510;border-radius:10px;padding:10px 12px;font-size:14px}
+.tw-foot{display:flex;gap:8px}
+.tw-foot button{flex:1;padding:14px}
+#twSOS{color:#ff4a3a;border-color:#6a1a12;font-weight:700}
+#twSOS.hold{animation:hold 2s linear forwards}
+.tw-hint{font-size:11px;color:#4a1f1a;text-align:center;margin-top:8px}

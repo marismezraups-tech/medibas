@@ -69,11 +69,11 @@ const S = {
   recording: false,
   outbox: [],
   unread: 0, lastSeenChat: 0,
-  settings: { wake: false, scent: false, sectors: true, vibrate: true, compass: false, interval: 5, share: true, layer: 'topo', overlays: {} },
+  settings: { wake: false, scent: false, sectors: true, vibrate: true, compass: false, interval: 5, share: true, layer: 'topo', overlays: {}, power: true },
   weather: null,
 };
 function load() {
-  try { const d = JSON.parse(localStorage.getItem(KEY)); if (d) { Object.assign(S, d); S.settings = Object.assign({ wake: false, scent: false, sectors: true, vibrate: true, compass: false, interval: 5, share: true, layer: 'topo', overlays: {} }, d.settings); } } catch (_) {}
+  try { const d = JSON.parse(localStorage.getItem(KEY)); if (d) { Object.assign(S, d); S.settings = Object.assign({ wake: false, scent: false, sectors: true, vibrate: true, compass: false, interval: 5, share: true, layer: 'topo', overlays: {}, power: true }, d.settings); } } catch (_) {}
   S.recording = S.recording && S.track.length > 0;
 }
 let saveT;
@@ -184,7 +184,7 @@ function handle(ev, remote) {
         notify(p.name + ': ' + p.text);
         if (current !== 'chat') toast('💬 ' + p.name + ': ' + p.text);
       }
-      renderChat(); break;
+      renderChat(); towerSoon(); break;
     case 'zone':
       S.zone = p.points || []; renderZone(); break;
     case 'sos':
@@ -301,6 +301,7 @@ function memberIcon(m, isMe) {
 }
 
 function renderMember(id) {
+  if (!mapVisible()) { mapDirty = true; return; }
   const m = S.members[id];
   if (id === S.me.id) return renderMe();
   if (!m || m.lat == null) { if (memLayers[id]) { map.removeLayer(memLayers[id]); delete memLayers[id]; } return; }
@@ -320,6 +321,7 @@ function markerIcon(m) {
 }
 
 function renderMarker(id) {
+  if (!mapVisible()) { mapDirty = true; return; }
   const m = S.markers[id];
   if (sectorLayers[id]) { map.removeLayer(sectorLayers[id]); delete sectorLayers[id]; }
   if (!m) { if (mkLayers[id]) { map.removeLayer(mkLayers[id]); delete mkLayers[id]; } return; }
@@ -336,6 +338,7 @@ function renderMarker(id) {
 }
 
 function renderZone() {
+  if (!mapVisible()) { mapDirty = true; return; }
   zoneLayer.clearLayers();
   if (S.zone.length >= 2) {
     const ll = S.zone.map(p => [p[0], p[1]]);
@@ -345,6 +348,8 @@ function renderZone() {
 }
 
 function renderAllMap() {
+  if (!mapVisible()) { mapDirty = true; return; }
+  mapDirty = false;
   Object.keys(mkLayers).forEach(id => { if (!S.markers[id]) renderMarker(id); });
   Object.keys(S.markers).forEach(renderMarker);
   Object.keys(memLayers).forEach(id => { if (!S.members[id]) renderMember(id); });
@@ -355,23 +360,59 @@ function renderAllMap() {
 
 /* ================= Mana atrašanās vieta ================= */
 let myPos = null, follow = true, firstFix = true, lastSent = { t: 0 }, compassHdg = null;
+/* GPS pārvaldnieks ar automātisku taupīšanu:
+ * "aktīvs"  — nepārtraukta augstas precizitātes sekošana (kad ej);
+ * "taupīšana" — ja 2 min nekusties, GPS tiek izslēgts un ieslēgts tikai uz brīdi ik 60 s.
+ * Tiklīdz pozīcija mainās vairāk par ~25 m (vai ieslēdz navigāciju / treku), atgriežas aktīvajā režīmā. */
+const STILL_AFTER = 120000, STILL_POLL = 60000;
+const Geo = {
+  watchId: null, pollT: null, mode: 'off', anchor: null, anchorT: 0,
+  err(err) { toast(err.code === 1 ? 'Atļauj piekļuvi atrašanās vietai, lai redzētu sevi kartē' : 'GPS signāls nav pieejams'); },
+  active() {
+    clearInterval(this.pollT); this.pollT = null;
+    if (this.watchId == null) this.watchId = navigator.geolocation.watchPosition(onPos, e => this.err(e), { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+    if (this.mode !== 'active') { this.mode = 'active'; this.anchorT = Date.now(); renderPower(); }
+  },
+  still() {
+    if (this.watchId != null) { navigator.geolocation.clearWatch(this.watchId); this.watchId = null; }
+    clearInterval(this.pollT);
+    this.pollT = setInterval(() => navigator.geolocation.getCurrentPosition(onPos, () => {}, { enableHighAccuracy: true, maximumAge: 0, timeout: 25000 }), STILL_POLL);
+    this.mode = 'still'; renderPower();
+  },
+  mustStayActive() { return !S.settings.power || S.recording || !!navTarget || mode === 'place' || mode === 'measure'; },
+  check(p) {
+    const moved = !this.anchor || dist(this.anchor, p) > Math.max(25, Math.min(p.acc, 80));
+    if (moved) { this.anchor = { lat: p.lat, lng: p.lng }; this.anchorT = Date.now(); if (this.mode === 'still') this.active(); return; }
+    if (this.mode === 'still' && this.mustStayActive()) return this.active();
+    if (this.mode === 'active' && !this.mustStayActive() && Date.now() - this.anchorT > STILL_AFTER && p.acc < 60) this.still();
+  },
+  wake() { this.anchorT = Date.now(); if (this.mode === 'still') this.active(); },
+};
 function startGeo() {
   if (!navigator.geolocation) return toast('Šī ierīce neatbalsta GPS');
-  navigator.geolocation.watchPosition(onPos, err => {
-    toast(err.code === 1 ? 'Atļauj piekļuvi atrašanās vietai, lai redzētu sevi kartē' : 'GPS signāls nav pieejams');
-  }, { enableHighAccuracy: true, maximumAge: 2000, timeout: 30000 });
+  Geo.active();
 }
+function renderPower() {
+  const el = $('#powerText'); if (!el) return;
+  el.textContent = Geo.mode === 'still' ? ' · 🔋 taupīšana' : '';
+  renderTower();
+}
+
+/* Baterijas līmenis (Chrome/Android; iPhone to nenodod) — redz arī komanda */
+let battery = null;
+if (navigator.getBattery) navigator.getBattery().then(b => { battery = b; b.addEventListener('levelchange', () => renderTower()); }).catch(() => {});
+const batLevel = () => battery ? Math.round(battery.level * 100) : null;
 function onPos(pos) {
   const c = pos.coords;
   const prev = myPos;
   myPos = { lat: c.latitude, lng: c.longitude, acc: c.accuracy, t: Date.now(), heading: (c.heading != null && !isNaN(c.heading) && c.speed > 0.5) ? c.heading : (prev ? prev.heading : null), speed: c.speed };
   renderMe();
   if (firstFix) { firstFix = false; map.setView([myPos.lat, myPos.lng], 15); loadWeather(); renderSun(); }
-  else if (follow) map.panTo([myPos.lat, myPos.lng], { animate: true });
+  else if (follow && mapVisible()) map.panTo([myPos.lat, myPos.lng], { animate: true });
   // treks
   if (S.recording && c.accuracy < 50) {
     const last = S.track[S.track.length - 1];
-    if (!last || dist({ lat: last[0], lng: last[1] }, myPos) > 8) { S.track.push([myPos.lat, myPos.lng, Date.now()]); trackLine.addLatLng([myPos.lat, myPos.lng]); save(); updateTrackChip(); }
+    if (!last || dist({ lat: last[0], lng: last[1] }, myPos) > 8) { S.track.push([myPos.lat, myPos.lng, Date.now()]); if (mapVisible()) trackLine.addLatLng([myPos.lat, myPos.lng]); else mapDirty = true; save(); updateTrackChip(); }
   }
   // sūtīšana komandai
   const due = Date.now() - lastSent.t > S.settings.interval * 1000;
@@ -381,16 +422,20 @@ function onPos(pos) {
     pushMember(true);
   }
   updateInfoChip();
+  Geo.check(myPos);
+  towerSoon();
 }
 function pushMember(withPos) {
   if (!S.hunt) return;
   const p = { id: S.me.id, name: S.me.name, role: S.me.role, color: S.me.color, t: Date.now() };
   if (S.settings.share && myPos) Object.assign(p, { lat: myPos.lat, lng: myPos.lng, acc: Math.round(myPos.acc), heading: myHeading() });
+  if (batLevel() != null) p.bat = batLevel();
   Sync.send(withPos ? 'pos' : 'member', p);
 }
 function myHeading() { return S.settings.compass && compassHdg != null ? compassHdg : myPos && myPos.heading; }
 function renderMe() {
   if (!myPos || !map) return;
+  if (!mapVisible()) { mapDirty = true; return; }
   const me = Object.assign({}, S.me, myPos, { heading: myHeading(), sos: S.members[S.me.id]?.sos });
   if (!myMarker) {
     myAcc = L.circle([myPos.lat, myPos.lng], { radius: myPos.acc, color: '#ff7a1a', weight: 1, fillOpacity: .08, interactive: false }).addTo(map);
@@ -407,19 +452,32 @@ function renderScent() {
   L.polygon(pts, { color: '#b0e0ff', weight: 1, fillColor: '#b0e0ff', fillOpacity: .18, interactive: false }).addTo(scentLayer);
 }
 
-function initCompass() {
-  const h = e => {
-    let hd = e.webkitCompassHeading != null ? e.webkitCompassHeading : (e.absolute && e.alpha != null ? 360 - e.alpha : null);
-    if (hd == null) return;
-    const so = (screen.orientation && screen.orientation.angle) || 0;
-    compassHdg = (hd + so + 360) % 360;
-    if (!initCompass._t) initCompass._t = setTimeout(() => { initCompass._t = null; renderMe(); }, 250);
-  };
-  const add = () => { window.addEventListener('deviceorientationabsolute', h, true); window.addEventListener('deviceorientation', h, true); };
-  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
-    DeviceOrientationEvent.requestPermission().then(r => { if (r === 'granted') add(); else toast('Kompasa atļauja liegta'); }).catch(() => {});
-  } else add();
+let compassListening = false, compassAllowed = false;
+function compassHandler(e) {
+  const hd = e.webkitCompassHeading != null ? e.webkitCompassHeading : (e.absolute && e.alpha != null ? 360 - e.alpha : null);
+  if (hd == null) return;
+  const so = (screen.orientation && screen.orientation.angle) || 0;
+  compassHdg = (hd + so + 360) % 360;
+  if (!compassHandler._t) compassHandler._t = setTimeout(() => { compassHandler._t = null; renderMe(); }, 400);
 }
+function compassAdd() {
+  if (compassListening) return;
+  window.addEventListener('deviceorientationabsolute', compassHandler, true); window.addEventListener('deviceorientation', compassHandler, true);
+  compassListening = true;
+}
+function compassRemove() {
+  if (!compassListening) return;
+  window.removeEventListener('deviceorientationabsolute', compassHandler, true); window.removeEventListener('deviceorientation', compassHandler, true);
+  compassListening = false;
+}
+/* Pieprasa atļauju (iOS — tikai no pieskāriena) un ieslēdz */
+function initCompass() {
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    DeviceOrientationEvent.requestPermission().then(r => { if (r === 'granted') { compassAllowed = true; compassSync(); } else toast('Kompasa atļauja liegta'); }).catch(() => {});
+  } else { compassAllowed = true; compassSync(); }
+}
+/* Kompasa sensors darbojas tikai, kad karte ir redzama (taupa bateriju) */
+function compassSync() { (S.settings.compass && compassAllowed && mapVisible()) ? compassAdd() : compassRemove(); }
 
 /* ================= Režīmi (atzīme / mērīšana / zona) ================= */
 let mode = null, measurePts = [];
@@ -587,7 +645,7 @@ function memberSheet(id) {
   const d = myPos && m.lat != null ? `${fmtDist(dist(myPos, m))} · ${Math.round(bearing(myPos, m))}° ${compass(bearing(myPos, m))}` : '—';
   openSheet(`<h2>${esc(m.name)} ${m.sos ? '🆘' : ''}</h2><div class="kv">
     <b>Loma</b><span>${ROLES[m.role] || '—'}</span><b>Pēdējās ziņas</b><span>${ago(m.t)} atpakaļ</span>
-    <b>Precizitāte</b><span>${m.acc ? '±' + m.acc + ' m' : '—'}</span><b>No manis</b><span>${d}</span></div>
+    <b>Precizitāte</b><span>${m.acc ? '±' + m.acc + ' m' : '—'}</span><b>Baterija</b><span>${m.bat != null ? m.bat + '%' : 'nav zināms'}</span><b>No manis</b><span>${d}</span></div>
     <div class="row gap"><button class="btn primary" id="mNav">🧭 Vadīt uz</button><button class="btn" id="mCenter">Rādīt kartē</button></div>`, root => {
     root.querySelector('#mNav').onclick = () => { closeSheet(); navigateTo(m, m.name, id); };
     root.querySelector('#mCenter').onclick = () => { closeSheet(); showView('map'); if (m.lat != null) map.setView([m.lat, m.lng], 16); };
@@ -599,6 +657,7 @@ let navTarget = null, navLine = null;
 function navigateTo(p, label, memberId) {
   showView('map');
   navTarget = { lat: p.lat, lng: p.lng, label, memberId };
+  Geo.wake();
   updateInfoChip();
   map.fitBounds(L.latLngBounds([[p.lat, p.lng], myPos ? [myPos.lat, myPos.lng] : [p.lat, p.lng]]).pad(.3), { maxZoom: 17 });
   follow = false; $('#btnFollow').classList.remove('on');
@@ -627,8 +686,8 @@ function updateTrackChip() {
 }
 
 /* ================= SOS ================= */
-function initSOS() {
-  const b = $('#btnSOS'); let t;
+function initSOS(b) {
+  let t;
   const start = e => {
     e.preventDefault();
     if (S.members[S.me.id]?.sos) return cancelSOS();
@@ -645,22 +704,24 @@ function sendSOS() {
   const p = { id: S.me.id, name: S.me.name, active: true, t: Date.now(), lat: myPos?.lat, lng: myPos?.lng };
   Sync.send('sos', p);
   sendChat('🆘 SOS! Vajadzīga palīdzība' + (myPos ? '' : ' (atrašanās vieta nav zināma)'), 'alert', myPos && { lat: myPos.lat, lng: myPos.lng });
-  $('#btnSOS').textContent = '✕';
+  sosLabels();
 }
 function cancelSOS() {
   Sync.send('sos', { id: S.me.id, name: S.me.name, active: false, t: Date.now(), lat: myPos?.lat, lng: myPos?.lng });
   sendChat('SOS atcelts — viss kārtībā ✅', 'normal');
-  $('#btnSOS').textContent = 'SOS';
+  setTimeout(sosLabels, 50);
 }
 function renderSOS() {
   const list = Object.values(S.members).filter(m => m.sos && m.id !== S.me.id);
   const bn = $('#sosBanner');
-  if (!list.length) { bn.classList.add('hidden'); return; }
+  towerSoon();
+  if (!list.length) { bn.classList.add('hidden'); sosLabels(); return; }
   bn.innerHTML = '🆘 SOS: ' + list.map(m => `<a href="#" data-id="${esc(m.id)}" style="color:#fff">${esc(m.name)}${myPos && m.lat != null ? ' (' + fmtDist(dist(myPos, m)) + ')' : ''}</a>`).join(', ') + ' — pieskaries, lai vadītu';
   bn.classList.remove('hidden');
   bn.onclick = e => { const a = e.target.closest('a'); if (!a) return; e.preventDefault(); const m = S.members[a.dataset.id]; if (m && m.lat != null) navigateTo(m, '🆘 ' + m.name, m.id); };
-  $('#btnSOS').textContent = S.members[S.me.id]?.sos ? '✕' : 'SOS';
+  sosLabels();
 }
+function sosLabels() { const on = S.members[S.me.id]?.sos; $('#btnSOS').textContent = on ? '✕' : 'SOS'; $('#twSOS').textContent = on ? '✕ Atcelt SOS' : 'SOS (turi 2 s)'; }
 
 /* ================= Čats ================= */
 function sendChat(text, kind = 'normal', loc) {
@@ -752,7 +813,7 @@ function renderTeam() {
     const d = !me && myPos && m.lat != null ? `${fmtDist(dist(myPos, m))} ${compass(bearing(myPos, m))}` : '';
     const stand = Object.values(S.markers).find(x => x.type === 'stand' && x.assigned === m.id);
     return `<div class="item ${m.sos ? 'sos' : ''}" data-id="${esc(m.id)}"><div class="av" style="background:${esc(m.color)}">${m.role === 'dog' ? '🐕' : esc(initials(m.name))}</div>
-      <div class="meta"><div>${esc(m.name)}${me ? ' (es)' : ''} ${m.sos ? '🆘' : ''}</div><div>${ROLES[m.role] || ''}${stand ? ' · 🪜 ' + esc(stand.name || 'tornis') : ''} · ${me ? 'tagad' : ago(m.t)}</div></div>
+      <div class="meta"><div>${esc(m.name)}${me ? ' (es)' : ''} ${m.sos ? '🆘' : ''}</div><div>${ROLES[m.role] || ''}${stand ? ' · 🪜 ' + esc(stand.name || 'tornis') : ''} · ${me ? 'tagad' : ago(m.t)}${(me ? batLevel() : m.bat) != null ? ` · <span style="color:${(me ? batLevel() : m.bat) < 20 ? 'var(--bad)' : 'inherit'}">🔋 ${me ? batLevel() : m.bat}%</span>` : ''}</div></div>
       <div class="muted" style="text-align:right;font-size:13px">${d}</div></div>`;
   }).join('') : '<div class="empty">Neviena dalībnieka</div>';
   // torņi
@@ -768,7 +829,7 @@ $('#memberList').onclick = e => { const it = e.target.closest('.item'); if (!it)
 $('#standList').onclick = e => { const it = e.target.closest('.item'); if (!it) return; const m = S.markers[it.dataset.mk]; showView('map'); map.setView([m.lat, m.lng], 16); markerSheet(m.id); };
 
 let listT;
-function throttleLists() { clearTimeout(listT); listT = setTimeout(() => { if (current === 'team') renderTeam(); if (current === 'log') renderLog(); }, 400); }
+function throttleLists() { towerSoon(); clearTimeout(listT); listT = setTimeout(() => { if (current === 'team') renderTeam(); if (current === 'log') renderLog(); }, 400); }
 
 function joinHunt(code, name, created) {
   if (!S.me.name) { showView('more'); toast('Vispirms ievadi savu vārdu profilā'); $('#pfName').focus(); return; }
@@ -908,7 +969,7 @@ setInterval(() => { loadWeather(); renderSun(); }, 15 * 60000);
 /* ================= Treks ================= */
 $('#btnTrack').onclick = () => {
   if (!S.recording) {
-    S.recording = true; S.track = []; trackLine.setLatLngs([]);
+    S.recording = true; S.track = []; trackLine.setLatLngs([]); Geo.wake();
     if (myPos) S.track.push([myPos.lat, myPos.lng, Date.now()]);
     toast('Maršruta ieraksts sākts');
   } else {
@@ -920,13 +981,70 @@ $('#btnTrack').onclick = () => {
   save(); updateInfoChip(); updateTrackChip();
 };
 
+/* ================= Torņa režīms (tumšs, minimāls ekrāns) =================
+ * Karte tiek paslēpta (netiek zīmēta un ielādētas flīzes), kompass izslēgts,
+ * ekrāns melns ar blāvi sarkanu tekstu — maz tērē OLED ekrānos un nebojā redzi tumsā. */
+let towerOn = false, towerT = null;
+const mapVisible = () => current === 'map' && !towerOn && document.visibilityState === 'visible';
+let mapDirty = false;
+function towerSoon() { if (!towerOn || towerT) return; towerT = setTimeout(() => { towerT = null; renderTower(); }, 700); }
+function enterTower() {
+  towerOn = true; document.body.classList.add('tower');
+  $('#tower').classList.remove('hidden'); compassSync(); renderTower();
+  enterTower._wl = !S.settings.wake; S.settings.wake = true; wake();
+  enterTower._iv = setInterval(renderTower, 15000);
+}
+function exitTower() {
+  towerOn = false; document.body.classList.remove('tower');
+  $('#tower').classList.add('hidden'); clearInterval(enterTower._iv);
+  if (enterTower._wl) { S.settings.wake = false; wake(); }
+  showView('map');
+}
+function untilStr(ms) { const m = Math.round(ms / 60000); return m < 60 ? m + ' min' : Math.floor(m / 60) + ' h ' + (m % 60) + ' min'; }
+function renderTower() {
+  if (!towerOn) return;
+  const now = new Date(), c = myPos || (map && map.getCenter()) || { lat: 56.9, lng: 24.6 };
+  const st = sunTimes(now, c.lat, c.lng);
+  let sun;
+  if (now < st.sunRise) sun = `Saullēkts ${hhmm(st.sunRise)} (pēc ${untilStr(st.sunRise - now)})`;
+  else if (now < st.sunSet) sun = `Saulriets ${hhmm(st.sunSet)} (pēc ${untilStr(st.sunSet - now)})`;
+  else if (now < st.civilSet) sun = `Krēsla līdz ${hhmm(st.civilSet)} (${untilStr(st.civilSet - now)})`;
+  else sun = 'Tumšs · saullēkts ' + hhmm(sunTimes(new Date(now.getTime() + 864e5), c.lat, c.lng).sunRise);
+  const w = S.weather;
+  const wind = w ? `Vējš no ${compass(w.dir)} ${w.speed.toFixed(0)} m/s → smarža uz ${compass((w.dir + 180) % 360)}` : '';
+  const stand = Object.values(S.markers).find(x => x.type === 'stand' && x.assigned === S.me.id);
+  const bat = batLevel();
+  const gps = !myPos ? 'GPS: gaida signālu' : `GPS ±${Math.round(myPos.acc)} m · ${Geo.mode === 'still' ? 'taupīšana' : 'aktīvs'}`;
+  const mems = Object.values(S.members).filter(m => m.id !== S.me.id && m.name);
+  mems.forEach(m => m._d = myPos && m.lat != null ? dist(myPos, m) : Infinity);
+  mems.sort((a, b) => (b.sos - a.sos) || a._d - b._d);
+  const rows = mems.slice(0, 10).map(m => `<div class="tw-row ${m.sos ? 'sos' : ''}"><span>${m.sos ? '🆘 ' : ''}${esc(m.name)}${m.role === 'dog' ? ' 🐕' : ''}</span><span>${isFinite(m._d) ? fmtDist(m._d) + ' ' + compass(bearing(myPos, m)) : '—'}</span><span class="tw-dim">${ago(m.t)}${m.bat != null ? ' · ' + m.bat + '%' : ''}</span></div>`).join('') || '<div class="tw-dim">Nav citu dalībnieku</div>';
+  const msgs = S.chat.slice(-4).reverse().map(m => `<div class="tw-msg ${m.kind === 'alert' ? 'alert' : ''}"><span class="tw-dim">${hhmm(new Date(m.t))} ${esc(m.from === S.me.id ? 'Es' : m.name)}:</span> ${esc(m.text)}</div>`).join('') || '<div class="tw-dim">Nav ziņu</div>';
+  $('#twBody').innerHTML = `
+    <div class="tw-clock">${hhmm(now)}</div>
+    <div>${sun}</div>
+    ${wind ? `<div>${wind}</div>` : ''}
+    <div class="tw-dim">${S.hunt ? esc(S.hunt.name) + ' · ' + ({ plan: 'plānotas', active: 'NOTIEK', ended: 'beigušās' }[S.hunt.status] || '') : 'Nav medību'}${stand ? ' · 🪜 ' + esc(stand.name || 'tornis') + (stand.dir != null ? ' (sektors ' + compass(stand.dir) + ')' : '') : ''}</div>
+    <div class="tw-dim">${gps}${bat != null ? ' · 🔋 ' + bat + '%' : ''}</div>
+    <h4>Komanda</h4>${rows}
+    <h4>Ziņas</h4>${msgs}`;
+}
+$('#btnTower').onclick = enterTower;
+$('#twExit').onclick = exitTower;
+$('#twQuick').onclick = e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (!S.hunt) return toast('Vispirms pievienojies medībām');
+  sendChat(b.dataset.t, b.dataset.a ? 'alert' : 'normal', myPos); vibrate(60); renderTower();
+};
+
 /* ================= Skati un pogas ================= */
 let current = 'map';
 function showView(v) {
   current = v;
   $$('.view').forEach(x => x.classList.toggle('active', x.id === 'view-' + v));
   $$('#tabbar button').forEach(b => b.classList.toggle('on', b.dataset.v === v));
-  if (v === 'map') setTimeout(() => map.invalidateSize(), 50);
+  if (v === 'map') setTimeout(() => { map.invalidateSize(); if (mapDirty) renderAllMap(); if (follow && myPos) map.panTo([myPos.lat, myPos.lng]); }, 50);
+  compassSync();
   if (v === 'team') renderTeam();
   if (v === 'log') renderLog();
   if (v === 'chat') { S.unread = 0; updateBadge(); renderChat(); const b = $('#chatList'); b.scrollTop = b.scrollHeight; }
@@ -967,7 +1085,7 @@ $('#btnZoneClear').onclick = () => { Sync.send('zone', { points: [] }); toast('Z
 function renderSettings() {
   $('#pfName').value = S.me.name; $('#pfRole').value = S.me.role; $('#pfColor').value = S.me.color;
   $('#setWake').checked = S.settings.wake; $('#setScent').checked = S.settings.scent; $('#setSectors').checked = S.settings.sectors;
-  $('#setVibrate').checked = S.settings.vibrate; $('#setCompass').checked = S.settings.compass; $('#setInterval').value = S.settings.interval; $('#setShare').checked = S.settings.share;
+  $('#setVibrate').checked = S.settings.vibrate; $('#setPower').checked = S.settings.power; $('#setCompass').checked = S.settings.compass; $('#setInterval').value = S.settings.interval; $('#setShare').checked = S.settings.share;
 }
 $('#pfSave').onclick = () => {
   const n = $('#pfName').value.trim(); if (!n) return toast('Ievadi vārdu');
@@ -979,7 +1097,8 @@ $('#setWake').onchange = e => { S.settings.wake = e.target.checked; save(); wake
 $('#setScent').onchange = e => { S.settings.scent = e.target.checked; save(); if (!S.weather) loadWeather(); renderScent(); };
 $('#setSectors').onchange = e => { S.settings.sectors = e.target.checked; save(); Object.keys(S.markers).forEach(renderMarker); };
 $('#setVibrate').onchange = e => { S.settings.vibrate = e.target.checked; save(); };
-$('#setCompass').onchange = e => { S.settings.compass = e.target.checked; save(); if (e.target.checked) initCompass(); renderMe(); };
+$('#setCompass').onchange = e => { S.settings.compass = e.target.checked; save(); if (e.target.checked) initCompass(); else compassSync(); renderMe(); };
+$('#setPower').onchange = e => { S.settings.power = e.target.checked; save(); if (!e.target.checked) Geo.active(); else Geo.wake(); };
 $('#setInterval').onchange = e => { S.settings.interval = +e.target.value; save(); };
 $('#setShare').onchange = e => { S.settings.share = e.target.checked; save(); if (!e.target.checked && S.hunt) Sync.send('member', { id: S.me.id, name: S.me.name, role: S.me.role, color: S.me.color, lat: null, lng: null, t: Date.now() }); };
 $('#btnWeather').onclick = loadWeather;
@@ -992,7 +1111,7 @@ async function wake() {
     else if (wakeLock) { await wakeLock.release(); wakeLock = null; }
   } catch (_) {}
 }
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') { wake(); Sync.flush(); if (S.hunt && Sync.server && !Sync.connected) Sync.connect(); } });
+document.addEventListener('visibilitychange', () => { compassSync(); if (document.visibilityState === 'visible') { if (mapDirty) renderAllMap(); renderTower(); wake(); Sync.flush(); if (S.hunt && Sync.server && !Sync.connected) Sync.connect(); } });
 
 function renderAll() { renderHeader(); renderAllMap(); renderChat(); renderSOS(); renderTeam(); renderLog(); updateBadge(); }
 
@@ -1004,8 +1123,8 @@ let pendingJoin = null;
     document.getElementById('map').innerHTML = '<div style="padding:40px 20px;text-align:center;color:#9fae94">Kartes bibliotēku neizdevās ielādēt.<br>Pirmajai palaišanai vajadzīgs internets — pēc tam aplikācija strādā arī bezsaistē.<br><br><button class="btn primary" onclick="location.reload()">Mēģināt vēlreiz</button></div>';
     return;
   }
-  initMap(); renderSettings(); renderQuick(); initSOS();
-  if (S.settings.compass) initCompass();
+  initMap(); renderSettings(); renderQuick(); initSOS($('#btnSOS')); initSOS($('#twSOS'));
+  if (S.settings.compass) { if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') compassAllowed = false; else { compassAllowed = true; } compassSync(); }
   $('#btnTrack').classList.toggle('rec', S.recording); $('#btnTrack').textContent = S.recording ? '⏹' : '⏺';
   $('#btnFollow').classList.add('on');
   renderAll(); renderSun(); renderWeather();

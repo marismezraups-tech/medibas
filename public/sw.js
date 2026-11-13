@@ -1,5 +1,5 @@
 // Service worker: aplikācijas čaula bezsaistē + kartes flīžu kešs
-const APP = 'medibas-app-v3', TILES = 'medibas-tiles-v1', MAX_TILES = 4000;
+const APP = 'medibas-app-v4', TILES = 'medibas-tiles-v1', MAX_TILES = 4000;
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css', 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'];
 

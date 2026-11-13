@@ -18,6 +18,7 @@ Progresīvā tīmekļa aplikācija (PWA), kas pēc funkcijām līdzinās Huntloc
 | **Vējš un laiks** | Dati no Open-Meteo: vēja virziens, ātrums, brāzmas un prognoze 6 stundām. Pēc izvēles var rādīt smaržas konusu (kurp vējš nes tavu smaržu). |
 | **Saule un mēness** | Rīta un vakara krēsla, saullēkts, saulriets un mēness fāze. Tiek aprēķināti ierīcē. |
 | **Žurnāls** | Nomedīto dzīvnieku un novērojumu vēsture no visām medībām ar statistiku pa sugām. Eksports uz CSV (Excel) un GPX. |
+| **Baterijas taupīšana** | Ja 2 min nekusties, GPS atpūšas un ieslēdzas tikai uz brīdi ik 60 s; kustoties — atpakaļ precīzā režīmā. 🌙 **Torņa režīms**: melns ekrāns ar blāvi sarkanu tekstu (komanda, attālumi, ziņas, saulriets, vējš, ātrās pogas, SOS) — karte un kompass tad netiek darbināti. Komanda redz katra dalībnieka baterijas līmeni (Android). |
 | **Maršruta ieraksts** | Treks ar attālumu un ilgumu; eksportē GPX. |
 | **Citas iespējas** | Neļaut ekrānam izslēgties, atrašanās vietas sūtīšanas biežums (3–60 s), atrašanās vietas kopīgošanas izslēgšana. |
 
