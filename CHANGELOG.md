@@ -3,6 +3,9 @@
 Versija redzama aplikācijā: **Vairāk → Par → Versija**. Ja serverī ir jaunāka versija, aplikācija piedāvā “Atjaunot”.
 Jaunu versiju izlaižot: palielini `version` failā `package.json` **un** `APP_VERSION` failā `public/app.js`.
 
+## 1.7.3 — 2026-11-17
+- Aplikācijas nosaukums uz ikonas un pārlūka cilnē: **Jurģi Hunt**
+
 ## 1.7.2 — 2026-11-13
 - Jauna ātrā ziņa **“▶ Medības sākas”** (trauksmes ziņa — vibrācija, push paziņojums)
 

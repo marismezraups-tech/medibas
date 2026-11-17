@@ -3,7 +3,7 @@
  * čats, SOS, medību zona, maršruta ieraksts, saule/mēness, vējš, eksports.
  */
 'use strict';
-const APP_VERSION = '1.7.2';   // jāsakrīt ar package.json versiju
+const APP_VERSION = '1.7.3';   // jāsakrīt ar package.json versiju
 
 /* ================= Palīgfunkcijas ================= */
 const $ = s => document.querySelector(s);
