@@ -3,6 +3,9 @@
 Versija redzama aplikācijā: **Vairāk → Par → Versija**. Ja serverī ir jaunāka versija, aplikācija piedāvā “Atjaunot”.
 Jaunu versiju izlaižot: palielini `version` failā `package.json` **un** `APP_VERSION` failā `public/app.js`.
 
+## 1.7.4 — 2026-11-17
+- Nosaukums “Jurģi Hunt” arī paziņojumos, dalīšanās saitēs, sadaļā “Par” un īstās aplikācijas (Capacitor) konfigurācijā
+
 ## 1.7.3 — 2026-11-17
 - Aplikācijas nosaukums uz ikonas un pārlūka cilnē: **Jurģi Hunt**
 

@@ -1,4 +1,4 @@
-# Medības — komandas medību aplikācija telefonam
+# Jurģi Hunt — komandas medību aplikācija telefonam
 
 Progresīvā tīmekļa aplikācija (PWA), kas pēc funkcijām līdzinās Huntloc: komandas dalībnieki reāllaikā kartē, torņi ar šaušanas sektoriem, novērojumi un nomedītie dzīvnieki, čats, SOS, vējš un saule. Telefonā to instalē no pārlūka uz sākuma ekrāna, un tā strādā kā parasta aplikācija, arī bez sakariem.
 

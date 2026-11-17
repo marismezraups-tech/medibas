@@ -1,9 +1,9 @@
-/* Medības — komandas medību aplikācija (PWA)
+/* Jurģi Hunt — komandas medību aplikācija (PWA)
  * Karte, dalībnieki reāllaikā, torņi ar šaušanas sektoriem, novērojumi, nomedītie dzīvnieki,
  * čats, SOS, medību zona, maršruta ieraksts, saule/mēness, vējš, eksports.
  */
 'use strict';
-const APP_VERSION = '1.7.3';   // jāsakrīt ar package.json versiju
+const APP_VERSION = '1.7.4';   // jāsakrīt ar package.json versiju
 
 /* ================= Palīgfunkcijas ================= */
 const $ = s => document.querySelector(s);
@@ -273,7 +273,7 @@ function notify(body, kind) {
   if (document.visibilityState === 'visible') return;
   if (S.pushOn && ['sos', 'alert', 'stand'].includes(kind)) return; // tos jau atsūta serveris kā push
   if ('Notification' in window && Notification.permission === 'granted') {
-    navigator.serviceWorker?.ready.then(r => r.showNotification('Medības', { body, icon: 'icons/icon-192.png', tag: 'medibas', renotify: true })).catch(() => {});
+    navigator.serviceWorker?.ready.then(r => r.showNotification('Jurģi Hunt', { body, icon: 'icons/icon-192.png', tag: 'medibas', renotify: true })).catch(() => {});
   }
 }
 
@@ -464,7 +464,7 @@ const Geo = {
     const BG = this.native();
     if (BG) {
       // Īstā aplikācija (Capacitor): atrašanās vieta tiek sūtīta arī ar izslēgtu ekrānu
-      if (!this.nativeId) BG.addWatcher({ backgroundMessage: 'Medības: tava atrašanās vieta tiek kopīgota ar komandu', backgroundTitle: 'Medības notiek', requestPermissions: true, stale: false, distanceFilter: 8 },
+      if (!this.nativeId) BG.addWatcher({ backgroundMessage: 'Jurģi Hunt: tava atrašanās vieta tiek kopīgota ar komandu', backgroundTitle: 'Medības notiek', requestPermissions: true, stale: false, distanceFilter: 8 },
         (loc, err) => { if (err) return this.err({ code: err.code === 'NOT_AUTHORIZED' ? 1 : 2 }); onPos({ coords: { latitude: loc.latitude, longitude: loc.longitude, accuracy: loc.accuracy, heading: loc.bearing, speed: loc.speed } }); })
         .then(id => this.nativeId = id);
       if (this.mode !== 'active') { this.mode = 'active'; this.anchorT = Date.now(); renderPower(); }
@@ -1020,7 +1020,7 @@ function renderTeam() {
     const hp = $('#hPass'); if (hp) hp.onclick = passSheet;
     $('#hShare').onclick = async () => {
       const text = `Pievienojies medībām "${S.hunt.name}": kods ${S.hunt.code}\n${link}`;
-      try { if (navigator.share) await navigator.share({ title: 'Medības', text, url: link }); else { await navigator.clipboard.writeText(text); toast('Nokopēts'); } } catch (_) {}
+      try { if (navigator.share) await navigator.share({ title: 'Jurģi Hunt', text, url: link }); else { await navigator.clipboard.writeText(text); toast('Nokopēts'); } } catch (_) {}
     };
     $('#hQR').onclick = () => showQR('Pievienoties: ' + S.hunt.name, link, 'Kods ' + S.hunt.code + ' · ' + link);
     if ($('#hStatus')) $('#hStatus').onclick = () => {

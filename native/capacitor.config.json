@@ -1,6 +1,6 @@
 {
   "appId": "lv.medibas.app",
-  "appName": "Medības",
+  "appName": "Jurģi Hunt",
   "webDir": "../public",
   "server": {
     "url": "https://medibas.onrender.com",

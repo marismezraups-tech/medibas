@@ -1,5 +1,5 @@
 // Service worker: aplikācijas čaula bezsaistē + kartes flīžu kešs
-const APP = 'medibas-app-v11', TILES = 'medibas-tiles-v1', MAX_TILES = 25000;
+const APP = 'medibas-app-v12', TILES = 'medibas-tiles-v1', MAX_TILES = 25000;
 const SHELL = ['./', 'index.html', 'app.js', 'style.css', 'manifest.webmanifest', 'icons/icon.svg', 'icons/icon-192.png',
   'vendor/leaflet/leaflet.css', 'vendor/leaflet/leaflet.js', 'vendor/qrcode/qrcode.min.js', 'icons/icon-512.png'];
 
@@ -52,7 +52,7 @@ self.addEventListener('push', e => {
   let d = {}; try { d = e.data ? e.data.json() : {}; } catch (_) { d = { body: e.data && e.data.text() }; }
   e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cs => {
     if (cs.some(c => c.visibilityState === 'visible' && c.focused)) return; // aplikācija ir atvērta — tā pati parāda
-    return self.registration.showNotification(d.title || 'Medības', {
+    return self.registration.showNotification(d.title || 'Jurģi Hunt', {
       body: d.body || '', icon: 'icons/icon-192.png', badge: 'icons/icon-192.png', tag: d.tag || 'medibas', renotify: true,
       requireInteraction: !!d.urgent, vibrate: d.urgent ? [500, 200, 500, 200, 500] : [200], data: { hunt: d.hunt },
     });
